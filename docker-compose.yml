@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: medical-diagnostics-agent
+    # 将本地结果目录挂载到容器中，便于在宿主机查看输出
+    volumes:
+      - "./Results:/app/results"
+      - "./Medical Reports:/app/Medical Reports"
+      - "./KnowledgeBase:/app/KnowledgeBase"
+    # 从 apikey.env 加载所有需要的环境变量（DashScope、Pinecone 等）
+    env_file:
+      - apikey.env
+    working_dir: /app
+    command: ["python", "Main.py"]
