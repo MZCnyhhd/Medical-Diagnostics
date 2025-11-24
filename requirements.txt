@@ -6,6 +6,7 @@ langchain-pinecone
 langchain-text-splitters
 langchain-google-genai
 langchain-huggingface
+PyYAML
 python-dotenv
 reportlab
 dashscope
