@@ -17,15 +17,21 @@ def generate_pdf(content: str, filename: str = "report.pdf") -> io.BytesIO:
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     
-    # 尝试注册中文字体 (Windows 默认字体)
+    # 尝试注册中文字体
     try:
-        # 常见 Windows 中文字体路径
-        font_path = "C:/Windows/Fonts/simhei.ttf"
+        # 优先使用项目内的字体文件 (兼容 Streamlit Cloud)
+        font_path = "data/fonts/SimHei.ttf"
         pdfmetrics.registerFont(TTFont('SimHei', font_path))
         c.setFont("SimHei", 12)
     except Exception:
-        # 如果找不到字体，回退到默认字体（不支持中文）
-        c.setFont("Helvetica", 12)
+        try:
+            # 回退到 Windows 系统字体
+            font_path = "C:/Windows/Fonts/simhei.ttf"
+            pdfmetrics.registerFont(TTFont('SimHei', font_path))
+            c.setFont("SimHei", 12)
+        except Exception:
+            # 如果都找不到，回退到默认字体（不支持中文，会乱码）
+            c.setFont("Helvetica", 12)
 
     y = height - 50
     margin = 50

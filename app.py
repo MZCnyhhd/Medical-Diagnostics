@@ -277,7 +277,9 @@ def main():
                         from src.tools.export import generate_pdf, generate_docx
                         
                         with col_pdf:
-                            pdf_file = generate_pdf(full_response)
+                            # 构建完整的报告内容
+                            report_content = f"【病例报告】\n{medical_report}\n\n【多学科团队综合诊断】\n{full_response}"
+                            pdf_file = generate_pdf(report_content)
                             st.download_button(
                                 label="📄 下载 PDF 报告",
                                 data=pdf_file,
@@ -286,7 +288,7 @@ def main():
                             )
                             
                         with col_docx:
-                            docx_file = generate_docx(full_response)
+                            docx_file = generate_docx(report_content)
                             st.download_button(
                                 label="📝 下载 Word 报告",
                                 data=docx_file,
