@@ -2,11 +2,16 @@ import sqlite3
 import json
 from datetime import datetime
 import os
+from pathlib import Path
 
 DB_PATH = "data/medical_diagnostics.db"
 
 def init_db():
     """初始化数据库表"""
+    # 确保数据库目录存在（Streamlit Cloud 兼容性修复）
+    db_dir = Path(DB_PATH).parent
+    db_dir.mkdir(parents=True, exist_ok=True)
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
