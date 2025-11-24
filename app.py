@@ -80,12 +80,14 @@ def main():
                 st.session_state.voice_input = "医生你好，我最近一周总是感觉头痛，尤其是下午的时候，太阳穴这边跳着疼。而且有时候会恶心，想吐但吐不出来。以前有高血压，不知道有没有关系。"
             
             default_text = st.session_state.get("voice_input", "")
-            medical_report = st.text_area("在此处粘贴医疗报告内容...", value=default_text, height=400)
+            with st.expander("📄 报告内容", expanded=True):
+                medical_report = st.text_area("在此处粘贴医疗报告内容...", value=default_text, height=400, label_visibility="collapsed")
         elif input_method == "上传 TXT 文件":
             uploaded_file = st.file_uploader("上传医疗报告 (.txt)", type=["txt"])
             if uploaded_file is not None:
                 medical_report = uploaded_file.read().decode("utf-8")
-                st.text_area("文件内容预览", value=medical_report, height=400, disabled=True)
+                with st.expander("📄 报告内容", expanded=True):
+                    st.text_area("文件内容预览", value=medical_report, height=400, disabled=True, label_visibility="collapsed")
         elif input_method == "选择示例报告":
             example_dir = os.path.join("data", "medical_reports", "Examples")
             if os.path.exists(example_dir):
@@ -95,7 +97,8 @@ def main():
                     if selected_example:
                         with open(os.path.join(example_dir, selected_example), "r", encoding="utf-8") as f:
                             medical_report = f.read()
-                        st.text_area("示例报告内容", value=medical_report, height=400)
+                        with st.expander("📄 报告内容", expanded=True):
+                            st.text_area("示例报告内容", value=medical_report, height=400, label_visibility="collapsed")
                 else:
                     st.warning("未找到示例报告文件。")
             else:
@@ -112,7 +115,7 @@ def main():
         st.markdown('<h2 class="sub-header">🩺 诊断过程</h2>', unsafe_allow_html=True)
         
         # 占位符：用于显示各专科医生的分析过程
-        process_container = st.container()
+        process_container = st.expander("🩺 详细诊断过程", expanded=True)
         
         # 渲染历史日志
         with process_container:
