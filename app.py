@@ -40,6 +40,9 @@ def main():
     if "diagnosis_result" not in st.session_state:
         st.session_state.diagnosis_result = None
 
+    if "specialist_logs" not in st.session_state:
+        st.session_state.specialist_logs = []
+
     st.markdown('<h1 class="main-header">🏥 医疗诊断 AI 智能体</h1>', unsafe_allow_html=True)
     
     # 渲染侧边栏
@@ -109,12 +112,18 @@ def main():
         st.markdown('<h2 class="sub-header">🩺 诊断过程</h2>', unsafe_allow_html=True)
         
         # 占位符：用于显示各专科医生的分析过程
-        specialist_placeholder = st.empty()
+        process_container = st.container()
+        
+        # 渲染历史日志
+        with process_container:
+            for log_html in st.session_state.specialist_logs:
+                st.markdown(log_html, unsafe_allow_html=True)
         
         if start_btn and medical_report:
-             # 清空之前的会话和结果
+             # 清空之前的会话、结果和日志
             st.session_state.messages = []
             st.session_state.diagnosis_result = None
+            st.session_state.specialist_logs = []
 
             if not os.getenv("DASHSCOPE_API_KEY") and not os.getenv("OPENAI_API_KEY") and not os.getenv("GOOGLE_API_KEY"):
                 st.error("请先配置 API Key！")
@@ -167,15 +176,21 @@ def main():
                                     # 在 status 内部显示简略信息
                                     st.markdown(f"**{agent_name}** 正在分析...")
                                     
-                                    # 在外部 placeholder 显示详细卡片
-                                    with specialist_placeholder.container():
-                                        st.markdown(f"""
-                                        <div class="specialist-card">
-                                            <div class="specialist-header">{agent_name} 正在分析...</div>
-                                            <div class="specialist-content">{response}</div>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                        await asyncio.sleep(0.5)
+                                    # 在外部 container 显示详细卡片
+                                    log_html = f"""
+                                    <div class="specialist-card">
+                                        <div class="specialist-header">{agent_name} 正在分析...</div>
+                                        <div class="specialist-content">{response}</div>
+                                    </div>
+                                    """
+                                    # 保存到 session state
+                                    st.session_state.specialist_logs.append(log_html)
+                                    
+                                    # 实时渲染
+                                    with process_container:
+                                        st.markdown(log_html, unsafe_allow_html=True)
+                                        
+                                    await asyncio.sleep(0.5)
 
                         except Exception as e:
                             status_container.update(label="❌ 发生错误", state="error")
