@@ -35,15 +35,7 @@ class Agent:
         self.model = get_chat_model()  # 通过工厂函数获取底层 LLM（基于 OpenAI）
 
     def create_prompt_template(self):  # 构建提示模板的方法
-        if self.role == "多学科团队":  # 若角色为多学科团队
-            # 多学科团队的 prompt 在 YAML 的根节点下，但这里我们使用动态构建的逻辑
-            # 注意：多学科团队的 prompt 需要动态插入 reports_text，所以我们只从 YAML 获取基础模板
-            # 这里的逻辑稍有不同，因为多学科团队的 prompt 是动态拼接的
-            # 为了保持兼容，我们暂时保留多学科团队的动态拼接逻辑，或者在 YAML 中定义模板
-            pass 
-            # (下方的多学科团队类重写了这个方法，所以这里主要处理专科医生)
-        
-        # 专科医生逻辑
+        # 专科医生逻辑 (多学科团队逻辑在子类中重写)
         specialist_prompts = PROMPTS_CONFIG.get("specialists", {})
         template = specialist_prompts.get(self.role, "")
         

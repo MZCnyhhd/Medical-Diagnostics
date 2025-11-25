@@ -17,13 +17,18 @@ def generate_pdf(content: str, filename: str = "report.pdf") -> io.BytesIO:
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
     
+    import os
     # 尝试注册中文字体
     try:
         # 优先使用项目内的字体文件 (兼容 Streamlit Cloud)
-        font_path = "data/fonts/SimHei.ttf"
+        # 使用绝对路径确保找到文件
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        font_path = os.path.join(base_dir, "data", "fonts", "SimHei.ttf")
+        
         pdfmetrics.registerFont(TTFont('SimHei', font_path))
         c.setFont("SimHei", 12)
-    except Exception:
+    except Exception as e:
+        print(f"Failed to load local font: {e}")
         try:
             # 回退到 Windows 系统字体
             font_path = "C:/Windows/Fonts/simhei.ttf"

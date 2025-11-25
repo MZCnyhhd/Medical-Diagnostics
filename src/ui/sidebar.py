@@ -3,7 +3,7 @@ import os
 
 def render_sidebar():
     with st.sidebar:
-        st.header("⚙️ 设置")
+        st.header("⚙️ 选择 AI 模型")
         
         # --- 模型切换功能 ---
         model_options = {
@@ -25,7 +25,8 @@ def render_sidebar():
             "选择 AI 模型",
             options=list(model_options.keys()),
             index=default_index,
-            key="model_selector"
+            key="model_selector",
+            label_visibility="collapsed"
         )
         
         # 更新环境变量 (注意：os.environ 的修改只在当前进程有效，
@@ -35,7 +36,6 @@ def render_sidebar():
         os.environ["LLM_PROVIDER"] = selected_key
         
         # 显示当前 API Key 状态 (脱敏显示)
-        st.caption(f"当前选择: {selected_key}")
         
         if selected_key == "qwen":
             if not os.getenv("DASHSCOPE_API_KEY"):
