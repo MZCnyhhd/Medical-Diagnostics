@@ -1,4 +1,18 @@
-"""LLM 工厂：支持多模型后端（Qwen, OpenAI, Gemini）及自动容灾切换。"""
+"""
+LLM 工厂模块：统一管理多个大语言模型，支持自动容灾切换
+
+本模块实现了 LLM 的统一接口，支持：
+1. 多模型后端：Qwen（通义千问）、OpenAI（GPT）、Gemini、本地 HuggingFace 模型
+2. 自动容灾：主模型失败时自动切换到备用模型
+3. 配置灵活：通过环境变量控制模型选择和行为
+
+核心功能：
+- get_chat_model(): 获取配置好的 Chat 模型实例（带自动回退）
+- _load_local_model(): 加载本地 HuggingFace 模型（用于离线部署）
+
+容灾策略：
+主模型（Qwen）→ 备用1（OpenAI）→ 备用2（Gemini）→ 备用3（本地模型）
+"""
 
 import os
 from langchain_community.chat_models import ChatTongyi
@@ -9,9 +23,21 @@ from src.services.logging import log_info, log_warn
 import streamlit as st
 from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
 
+
 @st.cache_resource
 def _load_local_model(model_path):
-    """加载本地 HuggingFace 模型 (带缓存)"""
+    """
+    加载本地 HuggingFace 模型（带 Streamlit 缓存）
+    
+    用于离线部署场景，支持加载本地 HuggingFace 模型（如 DeepSeek、ChatGLM 等）。
+    使用 Streamlit 缓存避免重复加载，提升性能。
+    
+    Args:
+        model_path (str): 本地模型路径（可以是 HuggingFace Hub 路径或本地目录）
+    
+    Returns:
+        ChatHuggingFace | None: 加载成功的模型实例，失败返回 None
+    """
     try:
         from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
         import torch
@@ -68,14 +94,17 @@ def get_chat_model(override_provider=None):
     available_models = {}
     init_errors = {}
 
-    # 0. 初始化本地模型
+    # ========== 第一步：初始化所有可用的模型 ==========
+    # 尝试初始化所有配置了 API Key 的模型，失败不影响其他模型
+    
+    # 0. 初始化本地模型（如果配置了 LOCAL_MODEL_PATH）
     local_model_path = os.getenv("LOCAL_MODEL_PATH")
     if local_model_path and os.path.exists(local_model_path):
         local_model = _load_local_model(local_model_path)
         if local_model:
             available_models["local"] = local_model
 
-    # 1. 初始化 Qwen
+    # 1. 初始化 Qwen（通义千问）- 默认主模型
     if os.getenv("DASHSCOPE_API_KEY"):
         try:
             model_name = os.getenv("QWEN_MODEL", "qwen-max")
@@ -84,7 +113,7 @@ def get_chat_model(override_provider=None):
             init_errors["qwen"] = str(e)
             log_warn(f"初始化 Qwen 失败: {e}")
 
-    # 2. 初始化 OpenAI
+    # 2. 初始化 OpenAI（GPT 系列）
     if os.getenv("OPENAI_API_KEY"):
         try:
             model_name = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
@@ -97,7 +126,7 @@ def get_chat_model(override_provider=None):
             init_errors["openai"] = str(e)
             log_warn(f"初始化 OpenAI 失败: {e}")
 
-    # 3. 初始化 Gemini
+    # 3. 初始化 Gemini（Google）
     if os.getenv("GOOGLE_API_KEY"):
         try:
             model_name = os.getenv("GEMINI_MODEL", "gemini-pro")
@@ -110,13 +139,15 @@ def get_chat_model(override_provider=None):
             init_errors["gemini"] = str(e)
             log_warn(f"初始化 Gemini 失败: {e}")
 
-    # 4. 确定主模型
+    # ========== 第二步：确定主模型 ==========
+    # 优先使用用户指定的模型，否则使用环境变量配置
     if override_provider:
         provider = override_provider.lower()
     else:
         provider = os.getenv("LLM_PROVIDER", "qwen").lower()
     
-    # 优先级顺序 (DeepSeek 已移除)
+    # 模型优先级顺序（用于自动切换）
+    # 如果主模型不可用，按此顺序尝试备用模型
     priority_order = ["qwen", "openai", "gemini", "local"]
     
     # 如果指定的主模型不可用
@@ -143,16 +174,19 @@ def get_chat_model(override_provider=None):
 
     primary_model = available_models[provider]
 
-    # 6. 配置 Fallbacks (备用模型)
+    # ========== 第三步：配置备用模型链（Fallback） ==========
     # 按照优先级顺序生成 fallback 列表，排除当前主模型
+    # 这样当主模型失败时，LangChain 会自动切换到备用模型
     fallback_models = []
     for p in priority_order:
         if p != provider and p in available_models:
             fallback_models.append(available_models[p])
 
     if fallback_models:
+        # 有备用模型，配置自动切换
         fallback_names = [p for p in priority_order if p != provider and p in available_models]
-        # 防止重复日志
+        
+        # 防止重复日志（使用函数属性缓存已记录的配置）
         log_msg = f"LLM 配置: 主模型={provider}, 备用模型链={fallback_names}"
         if not hasattr(get_chat_model, "_logged_configs"):
              get_chat_model._logged_configs = set()
@@ -161,9 +195,11 @@ def get_chat_model(override_provider=None):
             log_info(log_msg)
             get_chat_model._logged_configs.add(log_msg)
 
-        # 使用 LangChain 的 with_fallbacks 实现自动切换
+        # 使用 LangChain 的 with_fallbacks() 实现自动容灾切换
+        # 当主模型调用失败时，自动尝试备用模型，直到成功或所有模型都失败
         return primary_model.with_fallbacks(fallback_models)
     else:
+        # 无备用模型，直接返回主模型
         log_msg = f"LLM 配置: 主模型={provider}, 无可用备用模型。"
         if not hasattr(get_chat_model, "_logged_configs"):
              get_chat_model._logged_configs = set()
