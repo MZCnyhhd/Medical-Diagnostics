@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 默认命令：运行主诊断脚本
-CMD ["python", "Main.py"]
+CMD ["python", "app.py"]

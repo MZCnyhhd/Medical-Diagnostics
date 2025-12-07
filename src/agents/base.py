@@ -96,6 +96,29 @@ class Agent:
             
         return PromptTemplate.from_template(template)
 
+    def _enhance_prompt_with_rag(self, prompt: str) -> str:
+        """
+        使用 RAG 检索相关医学知识并增强 Prompt
+        
+        Args:
+            prompt (str): 原始 Prompt
+            
+        Returns:
+            str: 增强后的 Prompt
+        """
+        if self.medical_report:
+            # 从向量数据库检索与医疗报告相关的医学知识片段
+            rag_context = retrieve_knowledge_snippets(self.medical_report)
+            if rag_context:
+                # 将检索到的知识注入到 Prompt 中，作为 LLM 的参考上下文
+                prompt = (
+                    "以下是与患者情况相关的医学知识片段（供你参考，不必逐条复述）：\n"
+                    f"{rag_context}\n\n"
+                    "在参考以上知识的基础上，回答下面的任务：\n"
+                    f"{prompt}"
+                )
+        return prompt
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def run(self):
         """
@@ -121,17 +144,7 @@ class Agent:
         prompt = self.prompt_template.format(medical_report=self.medical_report)
         
         # 第二步：RAG 知识检索增强
-        if self.medical_report:
-            # 从向量数据库检索与医疗报告相关的医学知识片段
-            rag_context = retrieve_knowledge_snippets(self.medical_report)
-            if rag_context:
-                # 将检索到的知识注入到 Prompt 中，作为 LLM 的参考上下文
-                prompt = (
-                    "以下是与患者情况相关的医学知识片段（供你参考，不必逐条复述）：\n"
-                    f"{rag_context}\n\n"
-                    "在参考以上知识的基础上，回答下面的任务：\n"
-                    f"{prompt}"
-                )
+        prompt = self._enhance_prompt_with_rag(prompt)
         
         # 第三步：调用 LLM 生成诊断意见
         try:
@@ -161,15 +174,7 @@ class Agent:
         prompt = self.prompt_template.format(medical_report=self.medical_report)
         
         # 第二步：RAG 知识检索增强
-        if self.medical_report:
-            rag_context = retrieve_knowledge_snippets(self.medical_report)
-            if rag_context:
-                prompt = (
-                    "以下是与患者情况相关的医学知识片段（供你参考，不必逐条复述）：\n"
-                    f"{rag_context}\n\n"
-                    "在参考以上知识的基础上，回答下面的任务：\n"
-                    f"{prompt}"
-                )
+        prompt = self._enhance_prompt_with_rag(prompt)
         
         # 第三步：异步调用 LLM 生成诊断意见
         try:
@@ -204,6 +209,7 @@ class 多学科团队(Agent):
         """
         # 将专科报告保存为额外信息，供后续使用
         extra_info = reports
+        # 多学科团队不需要自己的医疗报告，因为它处理的是专科医生的报告
         super().__init__(role="多学科团队", extra_info=extra_info)
 
     def create_prompt_template(self):

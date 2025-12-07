@@ -1,9 +1,32 @@
 version: "3.9"
 
 services:
+  # Neo4j 知识图谱数据库
+  neo4j:
+    image: neo4j:5.15-community
+    container_name: medical-diagnostics-neo4j
+    ports:
+      - "7474:7474"  # HTTP 端口（Neo4j Browser）
+      - "7687:7687"  # Bolt 端口（应用程序连接）
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_max__size=2G
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   app:
     build: .
     container_name: medical-diagnostics-agent
+    depends_on:
+      neo4j:
+        condition: service_healthy
     # 将本地结果目录挂载到容器中，便于在宿主机查看输出
     volumes:
       - "./Results:/app/results"
@@ -12,5 +35,14 @@ services:
     # 从 apikey.env 加载所有需要的环境变量（DashScope、Pinecone 等）
     env_file:
       - apikey.env
+    environment:
+      # Neo4j 连接配置（如果 apikey.env 中没有配置）
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
     working_dir: /app
-    command: ["python", "Main.py"]
+    command: ["python", "app.py"]
+
+volumes:
+  neo4j_data:
+  neo4j_logs:

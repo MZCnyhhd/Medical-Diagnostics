@@ -9,6 +9,9 @@
 - 读取 data/knowledge_base/ 下的所有 .md 文件
 - 使用 LLM 抽取结构化知识（疾病、症状、检查、治疗、科室）
 - 将抽取的知识写入 Neo4j 知识图谱
+
+注意：本脚本调用的知识图谱服务方法已使用 Neo4j 的 MERGE 操作，
+可以自动防止创建重复的实体和关系，因此可安全地重复运行。
 """
 
 import os
@@ -16,6 +19,7 @@ import sys
 from pathlib import Path
 import re
 import json
+from typing import Dict
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent.parent
@@ -199,6 +203,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
             symptoms = knowledge.get("symptoms", [])
             for symptom in symptoms:
                 if symptom and symptom.strip():
+                    # 使用 MERGE 操作确保不会创建重复的实体
                     kg.create_symptom(symptom.strip())
                     kg.link_disease_symptom(disease_name, symptom.strip())
             
@@ -206,6 +211,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
             examinations = knowledge.get("examinations", [])
             for exam in examinations:
                 if exam and exam.strip():
+                    # 使用 MERGE 操作确保不会创建重复的实体
                     kg.create_examination(exam.strip())
                     kg.link_disease_examination(disease_name, exam.strip())
             
@@ -213,6 +219,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
             treatments = knowledge.get("treatments", [])
             for treatment in treatments:
                 if treatment and treatment.strip():
+                    # 使用 MERGE 操作确保不会创建重复的实体
                     kg.create_treatment(treatment.strip())
                     kg.link_disease_treatment(disease_name, treatment.strip())
             
@@ -221,6 +228,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
             for dept in departments:
                 if dept and dept.strip():
                     dept_standard = map_department_name(dept.strip())
+                    # 使用 MERGE 操作确保不会创建重复的实体
                     kg.create_department(dept_standard)
                     kg.link_disease_department(disease_name, dept_standard)
             
