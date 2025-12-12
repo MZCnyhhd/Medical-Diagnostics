@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 from src.services.kg import get_kg
 from src.services.llm import get_chat_model
 from src.services.logging import log_info, log_warn, log_error
-from src.core.config import APIKEY_ENV_PATH
+from src.core.settings import APIKEY_ENV_PATH
 
 # 加载环境变量
 load_dotenv(dotenv_path=APIKEY_ENV_PATH, override=True)

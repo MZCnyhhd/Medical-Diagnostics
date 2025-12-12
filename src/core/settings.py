@@ -9,6 +9,9 @@ from typing import Optional, Literal
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# API Key 配置文件路径（从原 config.py 移入）
+APIKEY_ENV_PATH = os.getenv("APIKEY_ENV_PATH", "config/apikey.env")
+
 
 @dataclass
 class Settings:

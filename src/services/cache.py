@@ -5,9 +5,7 @@
 """
 
 import hashlib
-import json
 import time
-from functools import lru_cache
 from typing import Optional, Dict, Any
 import sqlite3
 from pathlib import Path
@@ -262,32 +260,6 @@ class DiagnosisCache:
                 "total_hits": 0,
                 "average_hits": 0
             }
-
-
-# 相似度计算函数
-@lru_cache(maxsize=100)
-def calculate_similarity(text1: str, text2: str) -> float:
-    """
-    计算两个文本的相似度（简单版本）
-    
-    Args:
-        text1: 文本1
-        text2: 文本2
-        
-    Returns:
-        相似度分数 (0-1)
-    """
-    # 简单的 Jaccard 相似度
-    words1 = set(text1.lower().split())
-    words2 = set(text2.lower().split())
-    
-    if not words1 or not words2:
-        return 0.0
-    
-    intersection = words1.intersection(words2)
-    union = words1.union(words2)
-    
-    return len(intersection) / len(union) if union else 0.0
 
 
 # 全局缓存实例
