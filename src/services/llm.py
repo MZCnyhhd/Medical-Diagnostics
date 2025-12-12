@@ -9,16 +9,21 @@ LLM 工厂模块：统一管理多个大语言模型，支持自动容灾切换
 核心功能：
 - get_chat_model(): 获取配置好的 Chat 模型实例（带自动回退）
 - _load_local_model(): 加载本地 HuggingFace 模型（用于离线部署）
+- analyze_medical_image(): 使用视觉模型分析医疗图片
 
 容灾策略：
 主模型（Qwen）→ 备用1（OpenAI）→ 备用2（Gemini）→ 备用3（本地模型）
 """
 
 import os
+import base64
+import requests
+from typing import Optional, List, Any
 from langchain_community.chat_models import ChatTongyi
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
-from src.services.logging import log_info, log_warn
+from src.services.logging import log_info, log_warn, log_error
+from src.core.settings import get_settings
 
 import streamlit as st
 from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
@@ -182,14 +187,14 @@ def get_chat_model(override_provider=None):
         if p != provider and p in available_models:
             fallback_models.append(available_models[p])
 
+    # 防止重复日志（使用函数属性缓存已记录的配置）
+    if not hasattr(get_chat_model, "_logged_configs"):
+        get_chat_model._logged_configs = set()
+
     if fallback_models:
         # 有备用模型，配置自动切换
         fallback_names = [p for p in priority_order if p != provider and p in available_models]
-        
-        # 防止重复日志（使用函数属性缓存已记录的配置）
         log_msg = f"LLM 配置: 主模型={provider}, 备用模型链={fallback_names}"
-        if not hasattr(get_chat_model, "_logged_configs"):
-             get_chat_model._logged_configs = set()
         
         if log_msg not in get_chat_model._logged_configs:
             log_info(log_msg)
@@ -201,11 +206,161 @@ def get_chat_model(override_provider=None):
     else:
         # 无备用模型，直接返回主模型
         log_msg = f"LLM 配置: 主模型={provider}, 无可用备用模型。"
-        if not hasattr(get_chat_model, "_logged_configs"):
-             get_chat_model._logged_configs = set()
 
         if log_msg not in get_chat_model._logged_configs:
             log_info(log_msg)
             get_chat_model._logged_configs.add(log_msg)
 
         return primary_model
+
+
+def analyze_medical_image(image_bytes: bytes) -> str:
+    """
+    使用视觉模型分析医疗图片，提取医学文字描述
+    
+    支持的视觉模型（按优先级）：
+    1. Qwen-VL（通义千问视觉模型）
+    2. OpenAI GPT-4 Vision
+    3. Google Gemini Vision
+    
+    Args:
+        image_bytes (bytes): 图片的字节数据
+    
+    Returns:
+        str: 图片的医学文字描述，失败返回空字符串
+    """
+    # 将图片转换为 base64
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    
+    # 医学图片分析的系统提示
+    analysis_prompt = """你是一位专业的医学影像分析专家。请仔细分析这张医疗图片，并提供详细的文字描述报告。
+
+请按以下格式输出：
+
+## 图像类型
+（说明这是什么类型的医学图像，如：X光片、CT扫描、MRI、超声、病理切片、检验报告单等）
+
+## 图像描述
+（详细描述图像中可见的所有医学相关信息，包括解剖结构、异常发现等）
+
+## 关键发现
+（列出图像中的关键医学发现，如有异常请详细说明）
+
+## 初步印象
+（基于图像分析给出初步的医学印象，供后续诊断参考）
+
+请确保描述准确、专业，使用标准的医学术语。"""
+
+    # 尝试使用 Qwen-VL（通义千问视觉模型）
+    if os.getenv("DASHSCOPE_API_KEY"):
+        try:
+            log_info("使用 Qwen-VL 分析医疗图片...")
+            api_key = os.getenv("DASHSCOPE_API_KEY")
+            
+            response = requests.post(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "qwen-vl-max",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": analysis_prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                            ]
+                        }
+                    ],
+                    "max_tokens": 2000
+                },
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if content:
+                    log_info("Qwen-VL 图片分析成功")
+                    return content
+            else:
+                log_warn(f"Qwen-VL 请求失败: {response.status_code} - {response.text}")
+        except Exception as e:
+            log_warn(f"Qwen-VL 分析失败: {e}")
+    
+    # 尝试使用 OpenAI GPT-4 Vision
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            log_info("使用 OpenAI GPT-4 Vision 分析医疗图片...")
+            api_key = os.getenv("OPENAI_API_KEY")
+            
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": analysis_prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                            ]
+                        }
+                    ],
+                    "max_tokens": 2000
+                },
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if content:
+                    log_info("OpenAI GPT-4 Vision 图片分析成功")
+                    return content
+            else:
+                log_warn(f"OpenAI 请求失败: {response.status_code} - {response.text}")
+        except Exception as e:
+            log_warn(f"OpenAI Vision 分析失败: {e}")
+    
+    # 尝试使用 Google Gemini Vision
+    if os.getenv("GOOGLE_API_KEY"):
+        try:
+            log_info("使用 Google Gemini Vision 分析医疗图片...")
+            api_key = os.getenv("GOOGLE_API_KEY")
+            
+            response = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [
+                        {
+                            "parts": [
+                                {"text": analysis_prompt},
+                                {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
+                            ]
+                        }
+                    ]
+                },
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                if content:
+                    log_info("Google Gemini Vision 图片分析成功")
+                    return content
+            else:
+                log_warn(f"Gemini 请求失败: {response.status_code} - {response.text}")
+        except Exception as e:
+            log_warn(f"Gemini Vision 分析失败: {e}")
+    
+    log_error("所有视觉模型均无法分析图片")
+    return ""

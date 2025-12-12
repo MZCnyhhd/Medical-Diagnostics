@@ -13,6 +13,8 @@
 
 import os
 import asyncio
+import time
+from typing import List, Tuple, Optional
 from src.agents.base import (
     Agent,
     多学科团队,
@@ -20,22 +22,27 @@ from src.agents.base import (
 )
 from src.services.logging import log_info, log_warn, log_error
 from src.core.triage import triage_specialists
+from src.services.cache import get_cache, DiagnosisCache
+from src.core.settings import get_settings
 
 
-async def generate_diagnosis(medical_report: str):
+async def generate_diagnosis(medical_report: str, use_cache: bool = True):
     """
     执行多学科诊断流程，以流式生成器的方式返回结果
     ================================================
     
     工作流程：
-    1. 从配置文件加载所有可用专科医生
-    2. 使用 LLM 进行智能分诊，选择最相关的专科
-    3. 并发运行多个专科智能体进行分析
-    4. 收集所有专科意见
-    5. 由多学科团队汇总并生成最终诊断
+    1. 检查缓存（如果启用）
+    2. 从配置文件加载所有可用专科医生
+    3. 使用 LLM 进行智能分诊，选择最相关的专科
+    4. 并发运行多个专科智能体进行分析
+    5. 收集所有专科意见
+    6. 由多学科团队汇总并生成最终诊断
+    7. 保存到缓存（如果启用）
     
     Args:
         medical_report (str): 患者的医疗报告文本
+        use_cache (bool): 是否使用缓存，默认 True
     
     Yields:
         tuple[str, str]: 三种类型的结果：
@@ -52,6 +59,21 @@ async def generate_diagnosis(medical_report: str):
         >>>     else:
         >>>         print(f"{role}: {content}")
     """
+    
+    settings = get_settings()
+    start_time = time.time()
+    
+    # ==================== 第零步：检查缓存 ====================
+    if use_cache and settings.enable_cache:
+        cache = get_cache()
+        report_hash = DiagnosisCache.compute_hash(medical_report)
+        
+        cached_result = cache.get(report_hash, ttl=settings.cache_ttl)
+        if cached_result:
+            yield "Status", "📋 从缓存加载诊断结果..."
+            log_info(f"[Orchestrator] 使用缓存的诊断结果 (耗时: {time.time() - start_time:.2f}秒)")
+            yield "Final Diagnosis", cached_result["diagnosis"]
+            return
     
     # ==================== 第一步：加载专科配置 ====================
     # 从 config/prompts.yaml 动态获取所有可用专科医生
@@ -88,15 +110,33 @@ async def generate_diagnosis(medical_report: str):
     # 用于收集所有专科的诊断结果
     responses: dict[str, str | None] = {}
 
-    # ==================== 第四步：并发执行专科诊断 ====================
-    # 定义包装函数，用于在并发执行时保留智能体名称
+    # ==================== 第四步：并发执行专科诊断（带优化） ====================
+    # 定义包装函数，用于在并发执行时保留智能体名称，并添加超时控制
     async def wrapped_run(name, agent):
-        """包装 Agent.run_async()，返回 (名称, 结果) 元组"""
-        res = await agent.run_async()
-        return name, res
+        """包装 Agent.run_async()，返回 (名称, 结果) 元组，带超时控制"""
+        try:
+            res = await asyncio.wait_for(
+                agent.run_async(), 
+                timeout=settings.agent_timeout
+            )
+            return name, res
+        except asyncio.TimeoutError:
+            log_warn(f"[Orchestrator] {name} 诊断超时")
+            return name, f"诊断超时（超过 {settings.agent_timeout} 秒）"
+        except Exception as e:
+            log_error(f"[Orchestrator] {name} 诊断出错: {e}")
+            return name, f"诊断过程发生错误: {str(e)}"
 
+    # 限制并发数，避免资源过载
+    semaphore = asyncio.Semaphore(settings.max_concurrent_agents)
+    
+    async def limited_run(name, agent):
+        """带并发限制的执行"""
+        async with semaphore:
+            return await wrapped_run(name, agent)
+    
     # 创建所有智能体的异步任务
-    wrapped_tasks = [wrapped_run(name, agent) for name, agent in agents.items()]
+    wrapped_tasks = [limited_run(name, agent) for name, agent in agents.items()]
     
     # 使用 asyncio.as_completed 实现并发执行和流式返回
     # 这样可以在第一个专科完成时立即返回结果，无需等待所有专科
@@ -123,3 +163,18 @@ async def generate_diagnosis(medical_report: str):
 
     # 返回最终的综合诊断报告
     yield "Final Diagnosis", final_diagnosis
+    
+    # ==================== 第六步：保存到缓存 ====================
+    if use_cache and settings.enable_cache and final_diagnosis:
+        try:
+            cache = get_cache()
+            report_hash = DiagnosisCache.compute_hash(medical_report)
+            # 计算置信度（基于有效响应的比例）
+            confidence = len(valid_responses) / len(selected_names) if selected_names else 0.0
+            cache.set(report_hash, final_diagnosis, confidence)
+        except Exception as e:
+            log_warn(f"[Orchestrator] 保存缓存失败: {e}")
+    
+    # 记录总耗时
+    total_time = time.time() - start_time
+    log_info(f"[Orchestrator] 诊断完成，总耗时: {total_time:.2f}秒")

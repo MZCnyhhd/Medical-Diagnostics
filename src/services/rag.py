@@ -15,7 +15,7 @@ import os
 from typing import List
 
 from langchain_pinecone import PineconeVectorStore, PineconeEmbeddings
-from src.services.logging import log_warn, log_info
+from src.services.logging import log_warn
 
 
 def _is_rag_enabled() -> bool:
@@ -179,96 +179,3 @@ def retrieve_knowledge_snippets(query: str, k: int = 3) -> str:
 
     # 返回拼接后的知识片段文本
     return "\n".join(snippets)
-
-
-def retrieve_knowledge_with_kg(query: str, k: int = 3, use_kg: bool = True) -> str:
-    """
-    结合向量检索和知识图谱的混合检索
-    
-    工作流程：
-    1. 从向量数据库检索相关文档（RAG）
-    2. 从知识图谱查询结构化关系（KG）
-    3. 合并两种结果，提供更全面的知识支持
-    
-    Args:
-        query (str): 查询文本（医疗报告）
-        k (int): 向量检索返回的文档数量
-        use_kg (bool): 是否启用知识图谱查询
-    
-    Returns:
-        str: 合并后的知识文本
-    """
-    # 第一步：向量检索（RAG）
-    vector_knowledge = retrieve_knowledge_snippets(query, k=k)
-    
-    # 第二步：知识图谱查询（如果启用）
-    kg_knowledge = ""
-    if use_kg:
-        try:
-            from src.services.kg import get_kg
-            
-            kg = get_kg()
-            if kg.driver:
-                # 尝试从查询文本中提取症状关键词
-                # 这里简化处理，实际可以用 NLP 提取
-                symptoms_keywords = _extract_symptoms_from_query(query)
-                
-                if symptoms_keywords:
-                    # 根据症状查找相关疾病
-                    diseases = kg.find_diseases_by_symptoms(symptoms_keywords, limit=3)
-                    
-                    if diseases:
-                        kg_parts = ["[知识图谱]"]
-                        for disease in diseases:
-                            disease_name = disease.get("disease_name", "")
-                            matched_symptoms = disease.get("matched_symptoms", [])
-                            match_count = disease.get("match_count", 0)
-                            
-                            kg_parts.append(
-                                f"疾病：{disease_name}（匹配症状数：{match_count}，"
-                                f"匹配症状：{', '.join(matched_symptoms[:3])}）"
-                            )
-                        
-                        kg_knowledge = "\n".join(kg_parts)
-                        log_info(f"[RAG+KG] 从知识图谱找到 {len(diseases)} 个相关疾病")
-        except Exception as e:
-            log_warn(f"[RAG+KG] 知识图谱查询失败: {e}")
-    
-    # 合并两种知识源
-    if vector_knowledge and kg_knowledge:
-        return f"{vector_knowledge}\n\n{kg_knowledge}"
-    elif vector_knowledge:
-        return vector_knowledge
-    elif kg_knowledge:
-        return kg_knowledge
-    else:
-        return ""
-
-
-def _extract_symptoms_from_query(query: str) -> List[str]:
-    """
-    从查询文本中提取可能的症状关键词（简化版）
-    
-    实际应用中可以使用更复杂的 NLP 方法（如 NER、关键词匹配等）
-    
-    Args:
-        query: 查询文本
-    
-    Returns:
-        症状关键词列表
-    """
-    # 常见症状关键词列表（简化示例）
-    common_symptoms = [
-        "多饮", "多尿", "多食", "体重下降", "口渴",
-        "腹痛", "腹泻", "便秘", "恶心", "呕吐",
-        "头痛", "头晕", "心悸", "胸闷", "气短",
-        "发热", "咳嗽", "咳痰", "呼吸困难",
-        "皮疹", "瘙痒", "关节痛", "乏力", "失眠"
-    ]
-    
-    found_symptoms = []
-    for symptom in common_symptoms:
-        if symptom in query:
-            found_symptoms.append(symptom)
-    
-    return found_symptoms[:5]  # 最多返回 5 个症状

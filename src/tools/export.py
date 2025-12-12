@@ -1,4 +1,5 @@
 import io
+import os
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
@@ -11,13 +12,11 @@ try:
 except ImportError:
     Document = None
 
-def generate_pdf(content: str, filename: str = "report.pdf") -> io.BytesIO:
+def generate_pdf(content: str) -> io.BytesIO:
     """生成 PDF 文件流"""
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    
-    import os
     # 尝试注册中文字体
     try:
         # 优先使用项目内的字体文件 (兼容 Streamlit Cloud)
@@ -68,7 +67,7 @@ def generate_pdf(content: str, filename: str = "report.pdf") -> io.BytesIO:
     buffer.seek(0)
     return buffer
 
-def generate_docx(content: str, filename: str = "report.docx") -> io.BytesIO:
+def generate_docx(content: str) -> io.BytesIO:
     """生成 Word 文件流"""
     if Document is None:
         raise ImportError("python-docx not installed")
@@ -81,5 +80,12 @@ def generate_docx(content: str, filename: str = "report.docx") -> io.BytesIO:
         
     buffer = io.BytesIO()
     doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+def generate_markdown(content: str) -> io.BytesIO:
+    """生成 Markdown 文件流"""
+    buffer = io.BytesIO()
+    buffer.write(content.encode('utf-8'))
     buffer.seek(0)
     return buffer

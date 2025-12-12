@@ -15,6 +15,7 @@
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import json
 import os
+import re
 
 from langchain_core.prompts import PromptTemplate  # LangChain 的提示词模板类
 from src.services.llm import get_chat_model  # LLM 工厂函数，获取 Chat 模型实例
@@ -96,21 +97,26 @@ class Agent:
             
         return PromptTemplate.from_template(template)
 
-    def _enhance_prompt_with_rag(self, prompt: str) -> str:
+    def _prepare_prompt(self) -> str:
         """
-        使用 RAG 检索相关医学知识并增强 Prompt
+        准备增强后的 Prompt（公共逻辑）
         
-        Args:
-            prompt (str): 原始 Prompt
-            
+        工作流程：
+        1. 格式化 Prompt 模板，填充医疗报告
+        2. 使用 RAG 检索相关医学知识并注入 Prompt
+        
         Returns:
             str: 增强后的 Prompt
         """
+        log_info(f"{self.role} 智能体正在运行……")
+        
+        # 第一步：格式化基础 Prompt
+        prompt = self.prompt_template.format(medical_report=self.medical_report)
+        
+        # 第二步：RAG 知识检索增强
         if self.medical_report:
-            # 从向量数据库检索与医疗报告相关的医学知识片段
             rag_context = retrieve_knowledge_snippets(self.medical_report)
             if rag_context:
-                # 将检索到的知识注入到 Prompt 中，作为 LLM 的参考上下文
                 prompt = (
                     "以下是与患者情况相关的医学知识片段（供你参考，不必逐条复述）：\n"
                     f"{rag_context}\n\n"
@@ -124,12 +130,6 @@ class Agent:
         """
         同步执行智能体（阻塞式）
         
-        工作流程：
-        1. 格式化 Prompt 模板，填充医疗报告
-        2. 使用 RAG 检索相关医学知识并注入 Prompt
-        3. 调用 LLM 生成诊断意见
-        4. 返回诊断结果
-        
         注意：此方法会阻塞线程，建议在异步环境中使用 run_async()
         
         Returns:
@@ -138,21 +138,13 @@ class Agent:
         Raises:
             Exception: LLM 调用失败时抛出异常（会触发自动重试）
         """
-        log_info(f"{self.role} 智能体正在运行……")
-        
-        # 第一步：格式化基础 Prompt
-        prompt = self.prompt_template.format(medical_report=self.medical_report)
-        
-        # 第二步：RAG 知识检索增强
-        prompt = self._enhance_prompt_with_rag(prompt)
-        
-        # 第三步：调用 LLM 生成诊断意见
+        prompt = self._prepare_prompt()
         try:
-            response = self.model.invoke(prompt)  # 同步调用 LLM
-            return getattr(response, "content", str(response))  # 提取文本内容
+            response = self.model.invoke(prompt)
+            return getattr(response, "content", str(response))
         except Exception as e:
             log_error("调用模型时发生错误：", e)
-            raise e  # 抛出异常以触发自动重试（最多重试 3 次）
+            raise e
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def run_async(self):
@@ -160,7 +152,6 @@ class Agent:
         异步执行智能体（非阻塞式）
         
         这是推荐使用的方法，支持并发执行多个智能体。
-        工作流程与 run() 相同，但使用异步调用，不会阻塞事件循环。
         
         Returns:
             str: 专科医生的诊断意见文本
@@ -168,21 +159,13 @@ class Agent:
         Raises:
             Exception: LLM 调用失败时抛出异常（会触发自动重试）
         """
-        log_info(f"{self.role} 智能体正在运行……")
-        
-        # 第一步：格式化基础 Prompt
-        prompt = self.prompt_template.format(medical_report=self.medical_report)
-        
-        # 第二步：RAG 知识检索增强
-        prompt = self._enhance_prompt_with_rag(prompt)
-        
-        # 第三步：异步调用 LLM 生成诊断意见
+        prompt = self._prepare_prompt()
         try:
-            response = await self.model.ainvoke(prompt)  # 异步调用 LLM
-            return getattr(response, "content", str(response))  # 提取文本内容
+            response = await self.model.ainvoke(prompt)
+            return getattr(response, "content", str(response))
         except Exception as e:
             log_error("调用模型时发生错误：", e)
-            raise e  # 抛出异常以触发自动重试
+            raise e
 
 class 多学科团队(Agent):
     """
@@ -281,27 +264,8 @@ class 多学科团队(Agent):
         history = []  # 记录推理历史（thought 和 tool 的序列）
         observation = None  # 当前观察结果（工具执行后的返回值）
 
-        # 将中文角色名映射回英文 key，用于 ReAct 的 state 展示（便于调试）
-        role_to_key_map = {
-            "心脏科医生": "cardiology",
-            "心理医生": "psychology",
-            "精神科医生": "psychiatry",
-            "肺科医生": "pulmonology",
-            "神经科医生": "neurology",
-            "内分泌科医生": "endocrinology",
-            "免疫科医生": "immunology",
-            "消化科医生": "gastroenterology",
-            "皮肤科医生": "dermatology",
-            "肿瘤科医生": "oncology",
-            "血液科医生": "hematology",
-            "肾脏科医生": "nephrology",
-            "风湿科医生": "rheumatology"
-        }
-        
-        reports_state = {}
-        for name, content in self.extra_info.items():
-            key = role_to_key_map.get(name, name)
-            reports_state[key] = content
+        # 直接使用中文角色名作为 key
+        reports_state = dict(self.extra_info)
 
         # ========== ReAct 推理循环 ==========
         for step in range(max_steps):
@@ -349,7 +313,6 @@ class 多学科团队(Agent):
                 data = json.loads(raw_text)
             except Exception:
                 # JSON 解析失败，尝试清洗文本（移除可能的 markdown 标记等）
-                import re
                 # 移除某些模型可能添加的推理标签
                 clean_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
                 # 移除 markdown 代码块标记

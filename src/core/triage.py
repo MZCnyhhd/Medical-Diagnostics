@@ -8,7 +8,9 @@
 from langchain_core.prompts import PromptTemplate
 from src.services.llm import get_chat_model
 import json
+import ast
 from src.services.logging import log_info, log_error
+from src.tools.common import clean_llm_json_response
 
 
 async def triage_specialists(medical_report: str, available_specialists: list[str]) -> list[str]:
@@ -73,16 +75,9 @@ async def triage_specialists(medical_report: str, available_specialists: list[st
         # 提取 LLM 返回的文本内容
         content = getattr(response, "content", str(response))
         
-        import re
-        
         # ========== JSON 解析与清洗 ==========
         # LLM 可能返回包含额外文本的 JSON，需要清洗
-        
-        # 1. 移除某些模型可能添加的推理标签（如 Qwen 的 <think>）
-        clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-        
-        # 2. 移除 markdown 代码块标记（如 ```json ... ```）
-        clean_content = clean_content.replace("```json", "").replace("```", "").strip()
+        clean_content = clean_llm_json_response(content)
 
         # 3. 寻找 JSON 数组的起始和结束位置
         # 使用 find() 和 rfind() 定位第一个 '[' 和最后一个 ']'
@@ -101,7 +96,6 @@ async def triage_specialists(medical_report: str, available_specialists: list[st
                 except json.JSONDecodeError:
                     # 再次尝试修复常见的单引号问题（Python 风格而非 JSON 风格）
                     try:
-                        import ast
                         selected_specialists = ast.literal_eval(json_str)
                     except:
                         selected_specialists = None

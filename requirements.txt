@@ -20,3 +20,4 @@ python-docx
 pytest
 pytest-asyncio
 neo4j
+pypdf
