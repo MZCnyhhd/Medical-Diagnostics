@@ -69,20 +69,65 @@ app.py → orchestrator.py → agents → LLM
 ```
 app.py → [Cache] → orchestrator.py → agents → LLM
             ↓                 ↓            ↓
-         Settings        Concurrent    RAG + KG
-                         Execution   (prepared)
+         Settings        Concurrent    Graph RAG
+                         Execution   (Vector + KG)
 ```
+
+### Graph RAG 检索流程:
+```
+查询输入
+    │
+    ▼
+┌─────────────┐
+│  实体提取   │ ← LLM 提取医学实体
+└─────────────┘
+    │
+    ├────────────────┬────────────────┐
+    ▼                ▼                │
+┌─────────┐    ┌──────────┐          │
+│向量检索 │    │ 图谱检索  │          │
+│(FAISS/  │    │ (Neo4j)  │          │
+│Pinecone)│    │          │          │
+└─────────┘    └──────────┘          │
+    │                │                │
+    └────────┬───────┘                │
+             ▼                        │
+    ┌─────────────┐                   │
+    │  结果融合   │ ← 去重、排序       │
+    └─────────────┘                   │
+             │                        │
+             ▼                        │
+    ┌─────────────┐                   │
+    │ 格式化输出  │ ← 注入到 Prompt   │
+    └─────────────┘                   │
+```
+
+### 6. Graph RAG 混合检索 ✅ (2024-12-24)
+- **文件**: `src/services/graph_rag.py`, `src/services/kg.py`
+- **功能**:
+  - 实体提取：使用 LLM 从查询中提取医学实体（症状、疾病、检查、治疗、科室）
+  - 双通道检索：同时进行向量检索和知识图谱检索
+  - 智能融合：合并两种检索结果，去重排序
+  - 自动降级：Graph RAG 不可用时自动降级为纯向量检索
+- **新增 API**:
+  - `retrieve_hybrid_knowledge()`: 完整的混合检索，返回结构化结果
+  - `retrieve_hybrid_knowledge_snippets()`: 简化接口，兼容原有 RAG
+- **KnowledgeGraph 增强**:
+  - `find_diseases_by_symptoms_fuzzy()`: 模糊症状匹配
+  - `get_disease_full_context()`: 获取疾病完整上下文
+  - `find_diagnostic_path()`: 查找症状到疾病的诊断路径
+  - `get_department_diseases()`: 按科室查找疾病
+  - `get_treatment_diseases()`: 按治疗方法查找疾病
+- **配置项**:
+  - `ENABLE_GRAPH_RAG`: 是否启用 Graph RAG（默认 true）
+  - `GRAPH_RAG_VECTOR_K`: 向量检索返回数量（默认 3）
+  - `GRAPH_RAG_GRAPH_K`: 图谱检索返回数量（默认 5）
 
 ## 未来优化建议
 
 ### 第二阶段（建议）
 
-1. **完整集成 Neo4j**
-   - 在 Agent 中添加图谱查询
-   - 实现 GraphRAG 混合检索
-   - 优化知识融合策略
-
-2. **用户体验增强**
+1. **用户体验增强**
    - 添加诊断置信度显示
    - 智能问题推荐
    - 诊断解释功能
@@ -129,6 +174,11 @@ NEO4J_PASSWORD=password
 # RAG 配置
 ENABLE_RAG=true
 USE_LOCAL_RAG=false  # 使用本地 FAISS 而非 Pinecone
+
+# Graph RAG 配置
+ENABLE_GRAPH_RAG=true
+GRAPH_RAG_VECTOR_K=3  # 向量检索返回数量
+GRAPH_RAG_GRAPH_K=5   # 图谱检索返回数量
 ```
 
 ## 注意事项
@@ -149,11 +199,14 @@ USE_LOCAL_RAG=false  # 使用本地 FAISS 而非 Pinecone
 ### 新增文件
 - `src/core/settings.py` - 配置管理
 - `src/services/cache.py` - 缓存服务
+- `src/services/graph_rag.py` - Graph RAG 混合检索服务
 - `OPTIMIZATION_LOG.md` - 本文档
 
 ### 修改文件
 - `src/core/orchestrator.py` - 添加缓存和并发优化
 - `src/services/llm.py` - 集成配置系统
+- `src/services/kg.py` - 添加 Graph RAG 增强查询方法
+- `src/agents/base.py` - 集成 Graph RAG 混合检索
 - `src/ui/sidebar.py` - 修正知识库管理按钮
 - `app.py` - 集成新系统
 

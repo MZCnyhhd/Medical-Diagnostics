@@ -327,6 +327,233 @@ class KnowledgeGraph:
         """
         result = self._execute_query(query)
         return result[0] if result else {}
+    
+    # ========== Graph RAG 增强查询接口 ==========
+    
+    def find_diseases_by_symptoms_fuzzy(
+        self, 
+        symptoms: List[str], 
+        limit: int = 5,
+        min_match: int = 1
+    ) -> List[Dict]:
+        """
+        根据症状模糊查找相关疾病（支持部分匹配）
+        
+        与 find_diseases_by_symptoms 不同，此方法支持症状名称的模糊匹配，
+        适合处理 LLM 提取的可能不完全标准化的症状名称。
+        
+        Args:
+            symptoms: 症状列表
+            limit: 返回结果数量限制
+            min_match: 最少匹配症状数量
+        
+        Returns:
+            疾病列表，包含疾病名称、描述、匹配的症状数量等
+        """
+        if not symptoms:
+            return []
+        
+        # 构建模糊匹配的 Cypher 查询
+        # 使用 CONTAINS 实现部分匹配
+        query = """
+        UNWIND $symptoms as symptom_keyword
+        MATCH (s:Symptom)
+        WHERE s.name CONTAINS symptom_keyword OR symptom_keyword CONTAINS s.name
+        WITH DISTINCT s
+        MATCH (d:Disease)-[:HAS_SYMPTOM]->(s)
+        WITH d, collect(DISTINCT s.name) as matched_symptoms, count(DISTINCT s) as match_count
+        WHERE match_count >= $min_match
+        ORDER BY match_count DESC
+        LIMIT $limit
+        RETURN d.name as disease_name,
+               d.description as description,
+               match_count,
+               matched_symptoms
+        """
+        result = self._execute_query(query, {
+            "symptoms": symptoms,
+            "limit": limit,
+            "min_match": min_match
+        })
+        return result
+    
+    def get_disease_full_context(self, disease_name: str) -> Optional[Dict]:
+        """
+        获取疾病的完整上下文信息（用于 Graph RAG 检索增强）
+        
+        返回比 get_disease_info 更丰富的信息，包括：
+        - 疾病基本信息
+        - 所有关联的症状（带频率）
+        - 所有关联的检查项目
+        - 所有关联的治疗方法
+        - 所属科室
+        - 相关疾病（通过共享症状）
+        
+        Args:
+            disease_name: 疾病名称
+        
+        Returns:
+            完整的疾病上下文字典
+        """
+        # 获取疾病基本信息和所有关联实体
+        query = """
+        MATCH (d:Disease {name: $disease_name})
+        OPTIONAL MATCH (d)-[r1:HAS_SYMPTOM]->(s:Symptom)
+        OPTIONAL MATCH (d)-[:REQUIRES_EXAMINATION]->(e:Examination)
+        OPTIONAL MATCH (d)-[:TREATED_BY]->(t:Treatment)
+        OPTIONAL MATCH (d)-[:BELONGS_TO_DEPARTMENT]->(dept:Department)
+        WITH d, 
+             collect(DISTINCT {name: s.name, frequency: r1.frequency}) as symptoms,
+             collect(DISTINCT e.name) as examinations,
+             collect(DISTINCT t.name) as treatments,
+             collect(DISTINCT dept.name) as departments
+        RETURN d.name as name,
+               d.description as description,
+               d.aliases as aliases,
+               symptoms,
+               examinations,
+               treatments,
+               departments
+        """
+        result = self._execute_query(query, {"disease_name": disease_name})
+        
+        if not result:
+            return None
+        
+        disease_info = result[0]
+        
+        # 过滤掉空的症状（可能由于 OPTIONAL MATCH 产生）
+        disease_info["symptoms"] = [
+            s for s in disease_info.get("symptoms", []) 
+            if s.get("name")
+        ]
+        
+        # 获取相关疾病
+        related = self.get_related_diseases(disease_name, limit=3)
+        disease_info["related_diseases"] = [r.get("disease_name") for r in related if r.get("disease_name")]
+        
+        return disease_info
+    
+    def find_diagnostic_path(
+        self, 
+        symptoms: List[str], 
+        target_disease: str = None,
+        max_depth: int = 3
+    ) -> List[Dict]:
+        """
+        查找从症状到疾病的诊断路径
+        
+        这是一个高级图谱查询，用于解释症状与疾病之间的关联路径，
+        可用于辅助诊断推理和解释生成。
+        
+        Args:
+            symptoms: 输入症状列表
+            target_disease: 目标疾病名称（可选，不指定则返回所有可能的路径）
+            max_depth: 最大路径深度
+        
+        Returns:
+            诊断路径列表，每个路径包含：
+            - symptom: 起始症状
+            - disease: 目标疾病
+            - path: 路径描述
+            - confidence: 置信度
+        """
+        if not symptoms:
+            return []
+        
+        paths = []
+        
+        for symptom in symptoms[:5]:  # 限制症状数量避免查询过慢
+            if target_disease:
+                # 查找特定疾病的路径
+                query = """
+                MATCH path = (s:Symptom)-[:HAS_SYMPTOM*..{max_depth}]-(d:Disease {{name: $disease_name}})
+                WHERE s.name CONTAINS $symptom OR $symptom CONTAINS s.name
+                RETURN s.name as symptom,
+                       d.name as disease,
+                       length(path) as path_length,
+                       [n in nodes(path) | labels(n)[0] + ': ' + n.name] as path_nodes
+                LIMIT 3
+                """.format(max_depth=max_depth)
+                result = self._execute_query(query, {
+                    "symptom": symptom,
+                    "disease_name": target_disease
+                })
+            else:
+                # 查找所有可能的路径
+                query = """
+                MATCH (s:Symptom)<-[:HAS_SYMPTOM]-(d:Disease)
+                WHERE s.name CONTAINS $symptom OR $symptom CONTAINS s.name
+                RETURN s.name as symptom,
+                       d.name as disease,
+                       1 as path_length,
+                       [s.name, d.name] as path_nodes
+                LIMIT 5
+                """
+                result = self._execute_query(query, {"symptom": symptom})
+            
+            for r in result:
+                paths.append({
+                    "symptom": r.get("symptom"),
+                    "disease": r.get("disease"),
+                    "path_length": r.get("path_length", 1),
+                    "path_nodes": r.get("path_nodes", []),
+                    "confidence": 1.0 / r.get("path_length", 1)  # 路径越短置信度越高
+                })
+        
+        # 按置信度排序
+        paths.sort(key=lambda x: x["confidence"], reverse=True)
+        return paths
+    
+    def get_department_diseases(self, department_name: str, limit: int = 10) -> List[Dict]:
+        """
+        获取某科室的所有疾病
+        
+        Args:
+            department_name: 科室名称
+            limit: 返回结果数量限制
+        
+        Returns:
+            疾病列表
+        """
+        query = """
+        MATCH (d:Disease)-[:BELONGS_TO_DEPARTMENT]->(dept:Department)
+        WHERE dept.name CONTAINS $department_name OR $department_name CONTAINS dept.name
+        RETURN d.name as disease_name,
+               d.description as description,
+               dept.name as department
+        LIMIT $limit
+        """
+        result = self._execute_query(query, {
+            "department_name": department_name,
+            "limit": limit
+        })
+        return result
+    
+    def get_treatment_diseases(self, treatment_name: str, limit: int = 10) -> List[Dict]:
+        """
+        获取使用某种治疗方法的所有疾病
+        
+        Args:
+            treatment_name: 治疗方法名称
+            limit: 返回结果数量限制
+        
+        Returns:
+            疾病列表
+        """
+        query = """
+        MATCH (d:Disease)-[:TREATED_BY]->(t:Treatment)
+        WHERE t.name CONTAINS $treatment_name OR $treatment_name CONTAINS t.name
+        RETURN d.name as disease_name,
+               d.description as description,
+               t.name as treatment
+        LIMIT $limit
+        """
+        result = self._execute_query(query, {
+            "treatment_name": treatment_name,
+            "limit": limit
+        })
+        return result
 
 
 # 全局知识图谱实例（单例模式）

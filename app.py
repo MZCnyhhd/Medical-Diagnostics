@@ -5,28 +5,37 @@
 本文件是整个医疗诊断系统的前端入口，基于 Streamlit 框架构建。
 
 应用功能概述：
-1. 病例输入：支持文件上传（TXT/PDF/MD/图片）和示例选择
-2. 智能诊断：调用多学科会诊系统进行 AI 诊断
-3. 结果展示：实时显示诊断进度和各专科意见
-4. 历史管理：查看和管理历史诊断记录
-5. 报告导出：支持 Markdown 格式导出
-6. 智能问答：悬浮聊天助手，针对诊断结果进行追问
+1. 用户认证：安全的登录系统，支持多角色权限管理
+2. 病例输入：支持文件上传（TXT/PDF/MD/图片）和示例选择
+3. 智能诊断：调用多学科会诊系统进行 AI 诊断
+4. 结果展示：实时显示诊断进度和各专科意见
+5. 历史管理：查看和管理历史诊断记录
+6. 报告导出：支持 Markdown 格式导出
+7. 智能问答：悬浮聊天助手，针对诊断结果进行追问
+8. 用户管理：管理员可添加/删除用户
+
+用户角色：
+- admin：系统管理员，拥有所有权限
+- doctor：医生，可以进行诊断和查看历史
+- nurse：护士，可以上传报告和查看历史
 
 技术栈：
 - Streamlit：Python Web 应用框架，快速构建数据应用
+- streamlit-authenticator：用户认证库
 - asyncio：Python 异步编程，支持并发诊断
 - SQLite：轻量级数据库，存储历史记录
+- bcrypt：密码哈希加密
 
 页面布局：
 ```
 +------------------+------------------------+
 |                  |   📜 历史诊断记录      |
 |    侧边栏        +------------------------+
-|  - 系统介绍      |   📄 输入病例报告      |
-|  - 模型选择      |   [上传/示例选择]      |
-|  - 知识库管理    +------------------------+
-|                  |   🚀 开始诊断          |
-|                  +------------------------+
+|  - 用户信息      |   📄 输入病例报告      |
+|  - 系统介绍      |   [上传/示例选择]      |
+|  - 模型选择      +------------------------+
+|  - 知识库管理    |   🚀 开始诊断          |
+|  - 用户管理      +------------------------+
 |                  |   诊断过程记录         |
 |                  +------------------------+
 |                  |   📋 诊断结果          |
@@ -38,6 +47,11 @@
 ```bash
 streamlit run app.py
 ```
+
+默认账户：
+- 管理员：admin / admin123
+- 医生：doctor / doctor123
+- 护士：nurse / nurse123
 """
 
 # ==================== 标准库导入 ====================
@@ -81,6 +95,14 @@ try:
     from src.services.cache import get_cache
     # 数据库服务：存储历史诊断记录
     import src.services.db as db
+    # 用户认证服务
+    from src.services.auth import (
+        get_authenticator,
+        render_login_page,
+        render_user_info_sidebar,
+        get_user_role,
+        render_user_management
+    )
     
     # 加载环境变量配置文件
     # override=True 表示强制覆盖已存在的环境变量
@@ -232,11 +254,23 @@ def main():
     应用主函数
     
     这是 Streamlit 应用的主入口，负责：
-    1. 初始化数据库和会话状态
-    2. 渲染侧边栏
-    3. 渲染主界面各个区域
-    4. 处理用户交互和诊断流程
+    1. 用户认证检查
+    2. 初始化数据库和会话状态
+    3. 渲染侧边栏
+    4. 渲染主界面各个区域
+    5. 处理用户交互和诊断流程
     """
+    # ==================== 用户认证 ====================
+    # 检查用户是否已登录
+    username, authentication_status, name = render_login_page()
+    
+    # 如果未登录，停止执行后续代码
+    if not authentication_status:
+        return
+    
+    # 获取认证器实例（用于登出等操作）
+    authenticator = get_authenticator()
+    
     # ==================== 初始化 ====================
     # 初始化数据库（创建表，如果不存在）
     db.init_db()
@@ -258,8 +292,71 @@ def main():
         st.session_state.specialist_logs = []
 
     # ==================== 渲染侧边栏 ====================
-    # 侧边栏包含：系统介绍、模型选择、知识库管理等
+    # 侧边栏包含：用户信息、系统介绍、模型选择、知识库管理等
     render_sidebar()
+    
+    # 在侧边栏显示用户信息和登出按钮
+    render_user_info_sidebar(authenticator, username)
+
+    # ==================== 顶部入口：用户管理（方案A） ====================
+    if "active_page" not in st.session_state:
+        st.session_state.active_page = "main"
+
+    is_admin = get_user_role(username) == "admin"
+
+    try:
+        active_page = st.query_params.get("page", "main")
+    except Exception:
+        active_page = st.experimental_get_query_params().get("page", ["main"])[0]
+
+    st.session_state.active_page = active_page
+
+    if is_admin:
+        st.markdown(
+            """
+            <style>
+            a.user-mgmt-top-link {
+                position: fixed;
+                top: 4.2rem;
+                right: 1.0rem;
+                z-index: 10000;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4rem;
+                padding: 0.55rem 0.9rem;
+                border-radius: 10px;
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+                color: #0f172a;
+                font-weight: 600;
+                text-decoration: none;
+                user-select: none;
+            }
+            a.user-mgmt-top-link:hover {
+                border-color: #cbd5e1;
+                box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if st.session_state.active_page == "user_management":
+            st.markdown(
+                '<a class="user-mgmt-top-link" href="?page=main" target="_self">← 返回</a>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<a class="user-mgmt-top-link" href="?page=user_management" target="_self">👥 用户管理</a>',
+                unsafe_allow_html=True,
+            )
+
+    # 用户管理页（主区域渲染）
+    if st.session_state.active_page == "user_management":
+        render_user_management()
+        return
     
     # ==================== 历史记录区域 ====================
     # 使用自定义样式的子标题
@@ -297,7 +394,7 @@ def main():
     # on_change 回调：切换时清空之前的结果
     input_method = st.radio(
         "选择输入方式", 
-        ["上传文件", "选择示例报告"], 
+        ["上传病例报告", "示例病例报告"], 
         on_change=clear_results,
         horizontal=True,  # 横向排列
         label_visibility="collapsed"  # 隐藏标签
@@ -308,25 +405,45 @@ def main():
     uploaded_image_bytes = None
     
     # ---------- 上传文件模式 ----------
-    if input_method == "上传文件":
+    if input_method == "上传病例报告":
         # 显示支持的格式提示
-        st.caption("📎 支持格式：TXT、PDF、Markdown、PNG、JPG")
-        # 文件上传组件
-        uploaded_file = st.file_uploader(
-            "",  # 空标签
+        st.caption("📎 文本类文件（TXT、PDF、Markdown）、图像格式文件（PNG、JPG）、最多10个文件")
+        # 文件上传组件（支持多文件）
+        uploaded_files = st.file_uploader(
+            "上传医疗报告文件",  # 必须提供非空标签
             type=["txt", "pdf", "md", "markdown", "png", "jpg", "jpeg"], 
+            accept_multiple_files=True,  # 启用多文件上传
             on_change=clear_results,  # 文件变化时清空结果
-            label_visibility="collapsed"
+            label_visibility="collapsed"  # 隐藏标签但保持可访问性
         )
-        if uploaded_file is not None:
-            # 处理上传的文件
-            medical_report, uploaded_image_bytes = process_uploaded_file(uploaded_file)
-            # 如果是图片，保存到 session_state 供后续使用
-            if uploaded_image_bytes:
-                st.session_state.uploaded_image = uploaded_image_bytes
+        # 处理上传的文件
+        if uploaded_files:
+            # 检查文件数量限制
+            if len(uploaded_files) > 10:
+                st.error("⚠️ 最多支持上传 10 个文件，请减少文件数量")
+            else:
+                # 合并所有文件内容
+                all_texts = []
+                all_images = []
+                for uploaded_file in uploaded_files:
+                    text, image_bytes = process_uploaded_file(uploaded_file)
+                    if text:
+                        # 添加文件名标识
+                        all_texts.append(f"【文件：{uploaded_file.name}】\n{text}")
+                    if image_bytes:
+                        all_images.append(image_bytes)
+                # 合并文本内容
+                if all_texts:
+                    separator = "\n\n" + "="*50 + "\n\n"
+                    medical_report = separator.join(all_texts)
+                # 保存第一张图片到 session_state（如果有多张图片，优先处理第一张）
+                if all_images:
+                    st.session_state.uploaded_image = all_images[0]
+                    if len(all_images) > 1:
+                        st.info(f"📷 检测到 {len(all_images)} 张图片，将优先分析第一张")
                 
     # ---------- 选择示例报告模式 ----------
-    elif input_method == "选择示例报告":
+    elif input_method == "示例病例报告":
         # 示例文件目录
         example_dir = os.path.join("data", "medical_reports", "Examples")
         if os.path.exists(example_dir):
@@ -335,9 +452,9 @@ def main():
             if example_files:
                 # 文件名到中文名的映射（美化显示）
                 file_display_names = {
-                    "example_01_diarrhea.txt": "腹泻病例",
-                    "example_02_asthma.txt": "哮喘病例",
-                    "example_03_headache.txt": "头痛病例"
+                    "example_01_diarrhea.txt": "腹泻",
+                    "example_02_asthma.txt": "哮喘",
+                    "example_03_headache.txt": "头痛"
                 }
                 # 示例选择下拉框
                 selected_example = st.selectbox(
@@ -375,7 +492,7 @@ def main():
             st.info("请在上方选择或上传报告")
     
     # ==================== 开始诊断按钮 ====================
-    start_btn = st.button("🚀 开始诊断", type="primary", use_container_width=True)
+    start_btn = st.button("开始诊断", type="primary", use_container_width=True)
         
     # ==================== 状态显示区域 ====================
     # 创建一个占位符，用于动态更新状态
@@ -388,8 +505,12 @@ def main():
 
     # ==================== 诊断过程区域 ====================
     with st.expander("诊断过程-内容记录", expanded=False):
-        # 创建带边框的容器，用于显示诊断过程
-        process_container = st.container(height=400, border=True)
+        # 只有在有日志时才创建带边框且固定高度的容器，避免未启动时显示巨大的空白框
+        if not st.session_state.specialist_logs:
+            st.info("诊断启动后，各专科医生的会诊意见将在此处实时显示")
+            process_container = st.container()
+        else:
+            process_container = st.container(height=400, border=True)
             
         # 重新渲染历史日志（页面刷新后恢复显示）
         for log in st.session_state.specialist_logs:

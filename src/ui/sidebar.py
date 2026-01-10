@@ -17,10 +17,18 @@ def render_sidebar():
         st.divider()
         
         # 系统介绍
-        st.info(
-            "**智能多学科会诊系统 (MDT)**\n\n"
-            "模拟真实医院的 MDT 流程，由多个 AI 专科医生协同工作，提供全面的诊断建议。\n\n"
-            "v1.0.0"
+        st.markdown(
+            """
+            <div style="background-color: #e8f4f8; padding: 15px; border-radius: 5px; border: 1px solid #bce3eb; color: #315e6b; margin-bottom: 1rem;">
+                <div style="text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 8px;">
+                    智能多学科会诊系统 (MDT) v1.0.0
+                </div>
+                <div style="font-size: 14px; line-height: 1.5;">
+                    模拟真实医院的 MDT 流程，由多个 AI 专科医生协同工作，提供全面的诊断建议。
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
         
         

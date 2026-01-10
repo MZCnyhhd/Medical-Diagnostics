@@ -35,7 +35,7 @@ def get_css():
         max-width: 66% !important;
         margin-left: auto !important;
         margin-right: auto !important;
-        padding-top: 2rem !important;
+        padding-top: 5rem !important;
         padding-bottom: 150px !important; /* 增加底部留白，防止被悬浮元素遮挡 */
     }
 
@@ -46,8 +46,13 @@ def get_css():
         box-shadow: 4px 0 24px rgba(0, 0, 0, 0.02);
     }
     
+    /* 移除侧边栏默认空白头部，避免顶部留白 */
+    div[data-testid="stSidebarHeader"] {
+        display: none;
+    }
+    
     section[data-testid="stSidebar"] .block-container {
-        padding-top: 2rem;
+        padding-top: 5rem;
         padding-bottom: 2rem;
     }
 
@@ -109,6 +114,40 @@ def get_css():
         padding: 0.6rem 1.2rem;
         transition: all 0.2s ease;
         box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }
+
+    section[data-testid="stSidebar"] .stButton,
+    section[data-testid="stSidebar"] div[data-testid="stButton"] {
+        width: 100% !important;
+    }
+
+    section[data-testid="stSidebar"] .stButton > button,
+    section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
+        width: 100% !important;
+        display: block !important;
+    }
+
+    section[data-testid="stSidebar"] button {
+        width: 100% !important;
+        display: block !important;
+        box-sizing: border-box !important;
+    }
+
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"],
+    section[data-testid="stSidebar"] button[kind="secondary"] {
+        width: 100% !important;
+        display: flex !important;
+        box-sizing: border-box !important;
+    }
+
+    section[data-testid="stSidebar"] div:has(> button[data-testid="stBaseButton-secondary"]),
+    section[data-testid="stSidebar"] div:has(button[data-testid="stBaseButton-secondary"]) {
+        width: 100% !important;
+    }
+
+    section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(button[data-testid="stBaseButton-secondary"]),
+    section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(button[kind="secondary"]) {
+        width: 100% !important;
     }
 
     .stButton > button:hover {
@@ -263,8 +302,7 @@ def get_css():
     
     /* Dividers */
     hr {
-        border-color: #e2e8f0;
-        opacity: 0.6;
+        display: none;
     }
 
     /* Info/Success/Warning/Error Messages */

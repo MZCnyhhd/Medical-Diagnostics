@@ -46,8 +46,11 @@ from langchain_core.prompts import PromptTemplate
 from src.services.llm import get_chat_model
 # 安全工具执行器：用于 ReAct 模式中的工具调用
 from src.core.executor import execute_tool_call
-# RAG 知识检索函数：从向量数据库检索相关医学知识片段
-from src.services.rag import retrieve_knowledge_snippets
+# Graph RAG 混合检索函数：结合向量检索和知识图谱的增强检索
+# 提供两个接口：
+# - retrieve_hybrid_knowledge_snippets: 简化接口，返回字符串，兼容原有 RAG
+# - retrieve_hybrid_knowledge: 完整接口，返回结构化结果（包含实体、向量结果、图谱结果）
+from src.services.graph_rag import retrieve_hybrid_knowledge_snippets, retrieve_hybrid_knowledge
 # 日志工具函数：统一的日志记录接口
 from src.services.logging import log_info, log_error, log_warn
 
@@ -242,19 +245,24 @@ class Agent:
         # 将 medical_report 变量替换到模板中的 {medical_report} 占位符
         prompt = self.prompt_template.format(medical_report=self.medical_report)
         
-        # 第二步：RAG 知识检索增强
+        # 第二步：Graph RAG 混合知识检索增强
+        # 结合向量检索（语义相似度）和知识图谱（结构化关系）
         # 只有在有医疗报告的情况下才进行检索
         if self.medical_report:
-            # 调用 RAG 模块检索相关知识片段
-            # retrieve_knowledge_snippets 会返回格式化的知识文本
-            # 如果 RAG 未配置或失败，会返回空字符串
-            rag_context = retrieve_knowledge_snippets(self.medical_report)
+            # 调用 Graph RAG 模块进行混合检索
+            # retrieve_hybrid_knowledge_snippets 会：
+            # 1. 从查询中提取医学实体（症状、疾病、检查项目等）
+            # 2. 在向量数据库中进行语义相似度搜索
+            # 3. 在知识图谱中进行结构化查询（症状-疾病关联、疾病详情等）
+            # 4. 融合两种检索结果，返回格式化的知识文本
+            # 如果 Graph RAG 未配置或失败，会自动降级为纯向量检索
+            rag_context = retrieve_hybrid_knowledge_snippets(self.medical_report)
             
             # 如果成功检索到相关知识，将其添加到 Prompt 前面
             if rag_context:
                 prompt = (
                     # 知识片段说明：告诉 LLM 这些是参考资料，不需要逐条复述
-                    "以下是与患者情况相关的医学知识片段（供你参考，不必逐条复述）：\n"
+                    "以下是与患者情况相关的医学知识（来自知识图谱和向量数据库，供你参考）：\n"
                     f"{rag_context}\n\n"
                     # 任务指引：在参考知识的基础上完成诊断任务
                     "在参考以上知识的基础上，回答下面的任务：\n"
