@@ -1,21 +1,7 @@
-# ==================== 用户认证配置文件 ====================
-# 本文件用于存储医疗诊断系统的用户认证信息
-# 
-# 安全说明：
-# 1. 所有密码均使用 bcrypt 算法哈希存储
-# 2. 在生产环境中，请务必修改默认密码
-# 3. 建议将此文件权限设置为仅管理员可读写
-#
-# 默认账户：
-# - 管理员：admin / admin123
-# - 医生示例：doctor / doctor123
-# - 护士示例：nurse / nurse123
-
 cookie:
   expiry_days: 30
   key: medical_diagnosis_system_secret_key_2024
   name: medical_auth_cookie
-
 credentials:
   usernames:
     admin:
@@ -39,8 +25,6 @@ credentials:
       name: 李护士
       password: $2b$12$uT5EeBlYGuas.Bd48lZM0u1shmPdhhmAeTv5NW.1p6KF89NsihS1O
       role: nurse
-
-# 预授权用户列表（允许自行注册的邮箱）
 pre-authorized:
   emails:
-    - newuser@hospital.com
+  - newuser@hospital.com

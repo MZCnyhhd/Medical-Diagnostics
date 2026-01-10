@@ -188,6 +188,14 @@ def get_user_display_name(username: str) -> str:
     return username
 
 
+def _clear_authenticator_cache() -> None:
+    """
+    清除认证器缓存，强制下次获取时重新加载配置
+    """
+    if "authenticator" in st.session_state:
+        del st.session_state["authenticator"]
+
+
 def add_user(username: str, name: str, email: str, password: str, role: str = "nurse") -> bool:
     """
     添加新用户
@@ -219,6 +227,7 @@ def add_user(username: str, name: str, email: str, password: str, role: str = "n
     }
     
     save_auth_config(config)
+    _clear_authenticator_cache()  # 清除缓存，确保新用户立即生效
     return True
 
 
@@ -241,6 +250,7 @@ def delete_user(username: str) -> bool:
     if username in config['credentials']['usernames']:
         del config['credentials']['usernames'][username]
         save_auth_config(config)
+        _clear_authenticator_cache()  # 清除缓存
         return True
     
     return False
@@ -262,6 +272,7 @@ def update_user_password(username: str, new_password: str) -> bool:
     if username in config['credentials']['usernames']:
         config['credentials']['usernames'][username]['password'] = hash_password(new_password)
         save_auth_config(config)
+        _clear_authenticator_cache()  # 清除缓存
         return True
     
     return False
@@ -589,7 +600,7 @@ def render_user_management() -> None:
     """
     渲染用户管理界面（仅管理员可用）
     """
-    st.subheader("👥 用户管理")
+    st.markdown("<h2 style='text-align: center;'>👥 用户管理</h2>", unsafe_allow_html=True)
     
     # 获取当前用户角色
     current_user = st.session_state.get("username")
@@ -602,8 +613,25 @@ def render_user_management() -> None:
     # 显示现有用户
     users = get_all_users()
     
-    st.markdown("### 现有用户")
+    # 用户筛选下拉框
+    filter_col1, filter_col2, filter_col3 = st.columns([1, 2, 1])
+    with filter_col2:
+        selected_role_filter = st.selectbox(
+            "筛选用户角色",
+            ["全部", "护士", "医生", "管理员"],
+            key="user_filter_role",
+            label_visibility="collapsed"
+        )
+    
+    # 角色映射
+    role_map_cn = {"全部": "all", "护士": "nurse", "医生": "doctor", "管理员": "admin"}
+    filter_role_code = role_map_cn[selected_role_filter]
+    
     for username, data in users.items():
+        # 筛选逻辑
+        if filter_role_code != "all" and data['role'] != filter_role_code:
+            continue
+            
         role_emoji = {"admin": "👑", "doctor": "👨‍⚕️", "nurse": "👩‍⚕️"}.get(data['role'], "👤")
         col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
         
@@ -623,7 +651,7 @@ def render_user_management() -> None:
     st.markdown("---")
     
     # 添加新用户
-    st.markdown("### 添加新用户")
+    st.markdown("<h3 style='text-align: center;'>添加新用户</h3>", unsafe_allow_html=True)
     
     with st.form("add_user_form"):
         new_username = st.text_input("用户名", placeholder="例如：zhangsan")

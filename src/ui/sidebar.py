@@ -7,9 +7,8 @@ def render_sidebar():
         
         # --- 模型切换功能 ---
         model_options = {
-            "Qwen (通义千问)": "qwen",
-            "OpenAI (GPT-3.5/4)": "openai",
-            "Gemini (Google)": "gemini",
+            "Qwen-Turbo (通义千问)": "qwen",
+            "Baichuan M2 (百川)": "baichuan",
             "Local Model (本地模型)": "local"
         }
         

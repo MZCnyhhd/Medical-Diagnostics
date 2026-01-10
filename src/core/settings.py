@@ -18,16 +18,18 @@ class Settings:
     """应用配置类"""
     
     # ========== LLM 配置 ==========
-    llm_provider: Literal["qwen", "openai", "gemini", "local"] = "qwen"
+    llm_provider: Literal["qwen", "openai", "gemini", "baichuan", "local"] = "qwen"
     dashscope_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
+    baichuan_api_key: Optional[str] = None
     local_model_path: Optional[str] = None
     
     # 模型参数
     qwen_model: str = "qwen-turbo"
     openai_model: str = "gpt-4o-mini"
     gemini_model: str = "gemini-1.5-pro-latest"
+    baichuan_model: str = "Baichuan-M2"
     llm_temperature: float = 0.0
     
     # ========== 知识库配置 ==========
@@ -80,12 +82,14 @@ class Settings:
         self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY", self.dashscope_api_key)
         self.openai_api_key = os.getenv("OPENAI_API_KEY", self.openai_api_key)
         self.google_api_key = os.getenv("GOOGLE_API_KEY", self.google_api_key)
+        self.baichuan_api_key = os.getenv("BAICHUAN_API_KEY", self.baichuan_api_key)
         self.pinecone_api_key = os.getenv("PINECONE_API_KEY", self.pinecone_api_key)
         
         # Models
         self.qwen_model = os.getenv("QWEN_MODEL", self.qwen_model)
         self.openai_model = os.getenv("OPENAI_MODEL", self.openai_model)
         self.gemini_model = os.getenv("GEMINI_MODEL", self.gemini_model)
+        self.baichuan_model = os.getenv("BAICHUAN_MODEL", self.baichuan_model)
         
         # Temperature
         temp = os.getenv("LLM_TEMPERATURE")
@@ -123,6 +127,9 @@ class Settings:
         
         if self.llm_provider == "gemini" and not self.google_api_key:
             raise ValueError("使用 Gemini 必须配置 GOOGLE_API_KEY")
+
+        if self.llm_provider == "baichuan" and not self.baichuan_api_key:
+            raise ValueError("使用 Baichuan 必须配置 BAICHUAN_API_KEY")
         
         # 验证 RAG 配置
         if self.enable_rag and not self.use_local_rag and not self.pinecone_api_key:
@@ -153,6 +160,13 @@ class Settings:
                 "provider": "gemini",
                 "api_key": self.google_api_key,
                 "model": self.gemini_model,
+                "temperature": self.llm_temperature
+            }
+        elif self.llm_provider == "baichuan":
+            return {
+                "provider": "baichuan",
+                "api_key": self.baichuan_api_key,
+                "model": self.baichuan_model,
                 "temperature": self.llm_temperature
             }
         else:
