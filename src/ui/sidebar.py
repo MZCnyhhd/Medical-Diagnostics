@@ -3,46 +3,18 @@ import os
 
 def render_sidebar():
     with st.sidebar:
-        # Logo Area
-        st.markdown(
-            """
-            <div style="text-align: center; padding: 1rem 0;">
-                <div style="font-size: 3rem; margin-bottom: 0.5rem;">🏥</div>
-                <div style="font-weight: 800; font-size: 1.2rem; color: #2c3e50;">智能医疗诊断系统</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        st.divider()
-        
-        # 系统介绍
-        st.markdown(
-            """
-            <div style="background-color: #e8f4f8; padding: 15px; border-radius: 5px; border: 1px solid #bce3eb; color: #315e6b; margin-bottom: 1rem;">
-                <div style="text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 8px;">
-                    智能多学科会诊系统 (MDT) v1.0.0
-                </div>
-                <div style="font-size: 14px; line-height: 1.5;">
-                    模拟真实医院的 MDT 流程，由多个 AI 专科医生协同工作，提供全面的诊断建议。
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        
         st.subheader("🤖 选择大模型")
         
         # --- 模型切换功能 ---
         model_options = {
             "Qwen (通义千问)": "qwen",
             "OpenAI (GPT-3.5/4)": "openai",
-            "Gemini (Google)": "gemini"
+            "Gemini (Google)": "gemini",
+            "Local Model (本地模型)": "local"
         }
         
         # 获取当前环境变量中的默认值
-        current_provider = os.getenv("LLM_PROVIDER", "local")
+        current_provider = os.getenv("LLM_PROVIDER", "qwen")
         # 反向查找对应的 index
         default_index = 0
         for idx, (name, key) in enumerate(model_options.items()):
@@ -62,28 +34,19 @@ def render_sidebar():
         # 更新环境变量
         selected_key = model_options[selected_model_name]
         os.environ["LLM_PROVIDER"] = selected_key
-        
-        # 显示当前 API Key 状态 (Compact status)
-        status_cols = st.columns([1, 4])
-        with status_cols[0]:
-            st.markdown("🔑")
-        with status_cols[1]:
-            if selected_key == "qwen":
-                if not os.getenv("DASHSCOPE_API_KEY"):
-                    st.caption("🔴 :red[未配置 Key]")
-                else:
-                    st.caption("🟢 :green[Ready]")
-            elif selected_key == "openai":
-                if not os.getenv("OPENAI_API_KEY"):
-                    st.caption("🔴 :red[未配置 Key]")
-                else:
-                    st.caption("🟢 :green[Ready]")
-            elif selected_key == "gemini":
-                if not os.getenv("GOOGLE_API_KEY"):
-                    st.caption("🔴 :red[未配置 Key]")
-                else:
-                    st.caption("🟢 :green[Ready]")
-            
+
+        # --- 本地模型路径配置 ---
+        if selected_key == "local":
+            local_path = st.text_input(
+                "本地模型路径",
+                value=os.getenv("LOCAL_MODEL_PATH", ""),
+                placeholder="例如: models/qwen-7b-chat",
+                help="请输入本地 HuggingFace 模型目录的绝对路径"
+            )
+            if local_path:
+                os.environ["LOCAL_MODEL_PATH"] = local_path
+            else:
+                st.warning("请设置本地模型路径")
         
         st.subheader("📚 知识库管理")
         

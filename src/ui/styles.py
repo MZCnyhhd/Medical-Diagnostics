@@ -46,6 +46,23 @@ def get_css():
         box-shadow: 4px 0 24px rgba(0, 0, 0, 0.02);
     }
     
+    /* 侧边栏内容垂直居中 */
+    div[data-testid="stSidebarContent"] {
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+        height: 100vh !important;
+    }
+    
+    section[data-testid="stSidebar"] .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+        height: 100% !important;
+    }
+
     /* 移除侧边栏默认空白头部，避免顶部留白 */
     div[data-testid="stSidebarHeader"] {
         display: none;

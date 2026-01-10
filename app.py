@@ -298,11 +298,9 @@ def main():
     # 在侧边栏显示用户信息和登出按钮
     render_user_info_sidebar(authenticator, username)
 
-    # ==================== 顶部入口：用户管理（方案A） ====================
+    # ==================== 页面导航处理 ====================
     if "active_page" not in st.session_state:
         st.session_state.active_page = "main"
-
-    is_admin = get_user_role(username) == "admin"
 
     try:
         active_page = st.query_params.get("page", "main")
@@ -311,52 +309,21 @@ def main():
 
     st.session_state.active_page = active_page
 
-    if is_admin:
-        st.markdown(
-            """
-            <style>
-            a.user-mgmt-top-link {
-                position: fixed;
-                top: 4.2rem;
-                right: 1.0rem;
-                z-index: 10000;
-                display: inline-flex;
-                align-items: center;
-                gap: 0.4rem;
-                padding: 0.55rem 0.9rem;
-                border-radius: 10px;
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
-                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
-                color: #0f172a;
-                font-weight: 600;
-                text-decoration: none;
-                user-select: none;
-            }
-            a.user-mgmt-top-link:hover {
-                border-color: #cbd5e1;
-                box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        if st.session_state.active_page == "user_management":
-            st.markdown(
-                '<a class="user-mgmt-top-link" href="?page=main" target="_self">← 返回</a>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<a class="user-mgmt-top-link" href="?page=user_management" target="_self">👥 用户管理</a>',
-                unsafe_allow_html=True,
-            )
-
     # 用户管理页（主区域渲染）
     if st.session_state.active_page == "user_management":
-        render_user_management()
-        return
+        # 如果是管理员，渲染用户管理页
+        if get_user_role(username) == "admin":
+            # 添加返回按钮
+            if st.button("← 返回主页"):
+                st.query_params["page"] = "main"
+                st.rerun()
+            render_user_management()
+            return
+        else:
+            # 如果不是管理员但尝试访问，重定向回主页
+            st.session_state.active_page = "main"
+            st.query_params["page"] = "main"
+            st.rerun()
     
     # ==================== 历史记录区域 ====================
     # 使用自定义样式的子标题
@@ -407,40 +374,22 @@ def main():
     # ---------- 上传文件模式 ----------
     if input_method == "上传病例报告":
         # 显示支持的格式提示
-        st.caption("📎 文本类文件（TXT、PDF、Markdown）、图像格式文件（PNG、JPG）、最多10个文件")
-        # 文件上传组件（支持多文件）
-        uploaded_files = st.file_uploader(
+        st.caption("📎 文本类文件（TXT、PDF、Markdown）、图像格式文件（PNG、JPG）")
+        # 文件上传组件（支持单文件）
+        uploaded_file = st.file_uploader(
             "上传医疗报告文件",  # 必须提供非空标签
             type=["txt", "pdf", "md", "markdown", "png", "jpg", "jpeg"], 
-            accept_multiple_files=True,  # 启用多文件上传
+            accept_multiple_files=False,  # 仅支持单文件上传
             on_change=clear_results,  # 文件变化时清空结果
             label_visibility="collapsed"  # 隐藏标签但保持可访问性
         )
         # 处理上传的文件
-        if uploaded_files:
-            # 检查文件数量限制
-            if len(uploaded_files) > 10:
-                st.error("⚠️ 最多支持上传 10 个文件，请减少文件数量")
-            else:
-                # 合并所有文件内容
-                all_texts = []
-                all_images = []
-                for uploaded_file in uploaded_files:
-                    text, image_bytes = process_uploaded_file(uploaded_file)
-                    if text:
-                        # 添加文件名标识
-                        all_texts.append(f"【文件：{uploaded_file.name}】\n{text}")
-                    if image_bytes:
-                        all_images.append(image_bytes)
-                # 合并文本内容
-                if all_texts:
-                    separator = "\n\n" + "="*50 + "\n\n"
-                    medical_report = separator.join(all_texts)
-                # 保存第一张图片到 session_state（如果有多张图片，优先处理第一张）
-                if all_images:
-                    st.session_state.uploaded_image = all_images[0]
-                    if len(all_images) > 1:
-                        st.info(f"📷 检测到 {len(all_images)} 张图片，将优先分析第一张")
+        if uploaded_file:
+            text, image_bytes = process_uploaded_file(uploaded_file)
+            if text:
+                medical_report = text
+            if image_bytes:
+                st.session_state.uploaded_image = image_bytes
                 
     # ---------- 选择示例报告模式 ----------
     elif input_method == "示例病例报告":

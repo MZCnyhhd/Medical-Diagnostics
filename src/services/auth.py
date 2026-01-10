@@ -482,6 +482,14 @@ def render_login_page() -> Tuple[Optional[str], bool, Optional[str]]:
             <div style="font-size: 4rem; margin-bottom: 1rem;">🏥</div>
             <h1>智能医疗诊断系统</h1>
         </div>
+        <div style="background-color: #e8f4f8; padding: 15px; border-radius: 5px; border: 1px solid #bce3eb; color: #315e6b; margin-bottom: 2rem; text-align: left;">
+            <div style="text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 8px;">
+                智能多学科会诊系统 (MDT) v1.0.0
+            </div>
+            <div style="font-size: 14px; line-height: 1.5;">
+                模拟真实医院的 MDT 流程，由多个 AI 专科医生协同工作，提供全面的诊断建议。
+            </div>
+        </div>
         """, unsafe_allow_html=True)
         
         # 使用 streamlit-authenticator 的登录表单
@@ -561,6 +569,12 @@ def render_user_info_sidebar(authenticator: stauth.Authenticate, username: str) 
             ">{role_display.get(role, '用户')}</div>
         </div>
     """, unsafe_allow_html=True)
+    
+    # 用户管理按钮（仅管理员可见）
+    if role == "admin":
+        if st.sidebar.button("👥 用户管理", use_container_width=True):
+            st.query_params["page"] = "user_management"
+            st.rerun()
     
     # 登出按钮 - 兼容不同版本的 API
     try:

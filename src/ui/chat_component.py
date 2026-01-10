@@ -156,6 +156,76 @@ def render_chat_component(api_key, base_url, model, system_prompt):
             .dot:nth-child(1) { animation-delay: -0.32s; }
             .dot:nth-child(2) { animation-delay: -0.16s; }
             @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+
+            .modal-overlay {
+                position: fixed;
+                inset: 0;
+                display: none;
+                align-items: center;
+                justify-content: center;
+                background: rgba(15, 23, 42, 0.45);
+                z-index: 2147483647;
+            }
+
+            .modal-overlay.open {
+                display: flex;
+            }
+
+            .modal-dialog {
+                width: 360px;
+                max-width: calc(100vw - 32px);
+                background: #ffffff;
+                border-radius: 12px;
+                border: 1px solid #e2e8f0;
+                box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.18), 0 10px 10px -5px rgba(0, 0, 0, 0.08);
+                padding: 14px 14px 12px 14px;
+            }
+
+            .modal-title {
+                font-size: 14px;
+                font-weight: 600;
+                color: #0f172a;
+                margin: 0 0 6px 0;
+            }
+
+            .modal-text {
+                font-size: 13px;
+                color: #334155;
+                margin: 0 0 12px 0;
+                line-height: 1.5;
+            }
+
+            .modal-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 8px;
+            }
+
+            .modal-btn {
+                border: 1px solid #e2e8f0;
+                background: #ffffff;
+                color: #0f172a;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+
+            .modal-btn:hover {
+                background: #f8fafc;
+            }
+
+            .modal-btn-primary {
+                background: #3b82f6;
+                border-color: #3b82f6;
+                color: #ffffff;
+            }
+
+            .modal-btn-primary:hover {
+                background: #2563eb;
+                border-color: #2563eb;
+            }
         </style>
     </head>
     <body>
@@ -174,6 +244,17 @@ def render_chat_component(api_key, base_url, model, system_prompt):
             </button>
         </div>
 
+        <div id="clear-confirm-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-title">提示</div>
+                <div class="modal-text">确定要清空聊天记录吗？</div>
+                <div class="modal-actions">
+                    <button id="clear-confirm-cancel" class="modal-btn" type="button">取消</button>
+                    <button id="clear-confirm-ok" class="modal-btn modal-btn-primary" type="button">确定</button>
+                </div>
+            </div>
+        </div>
+
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <script>
             // Constants replaced by Python
@@ -187,8 +268,37 @@ def render_chat_component(api_key, base_url, model, system_prompt):
             const userInput = document.getElementById('user-input');
             const sendBtn = document.getElementById('send-btn');
             const clearBtn = document.getElementById('clear-btn');
+            const clearConfirmOverlay = document.getElementById('clear-confirm-overlay');
+            const clearConfirmOk = document.getElementById('clear-confirm-ok');
+            const clearConfirmCancel = document.getElementById('clear-confirm-cancel');
             
             let messages = [];
+            let clearConfirmResolver = null;
+            let clearConfirmPreviousFocus = null;
+
+            function openClearConfirm() {
+                if (clearConfirmResolver) return Promise.resolve(false);
+                clearConfirmPreviousFocus = document.activeElement;
+                clearConfirmOverlay.classList.add('open');
+                clearConfirmOverlay.setAttribute('aria-hidden', 'false');
+                setTimeout(() => clearConfirmOk.focus(), 0);
+                return new Promise((resolve) => {
+                    clearConfirmResolver = resolve;
+                });
+            }
+
+            function closeClearConfirm(result) {
+                if (!clearConfirmResolver) return;
+                const resolve = clearConfirmResolver;
+                clearConfirmResolver = null;
+                clearConfirmOverlay.classList.remove('open');
+                clearConfirmOverlay.setAttribute('aria-hidden', 'true');
+                if (clearConfirmPreviousFocus && typeof clearConfirmPreviousFocus.focus === 'function') {
+                    clearConfirmPreviousFocus.focus();
+                }
+                clearConfirmPreviousFocus = null;
+                resolve(result);
+            }
 
             // Initialize
             function init() {
@@ -201,12 +311,21 @@ def render_chat_component(api_key, base_url, model, system_prompt):
                     if (e.key === 'Enter') sendMessage();
                 });
                 
-                clearBtn.addEventListener('click', () => {
-                    if (confirm('确定要清空聊天记录吗？')) {
-                        messages = [{ role: "system", content: SYSTEM_PROMPT }];
-                        saveChatHistory();
-                        restoreChatUI();
-                    }
+                clearConfirmOk.addEventListener('click', () => closeClearConfirm(true));
+                clearConfirmCancel.addEventListener('click', () => closeClearConfirm(false));
+                clearConfirmOverlay.addEventListener('click', (e) => {
+                    if (e.target === clearConfirmOverlay) closeClearConfirm(false);
+                });
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') closeClearConfirm(false);
+                });
+
+                clearBtn.addEventListener('click', async () => {
+                    const ok = await openClearConfirm();
+                    if (!ok) return;
+                    messages = [{ role: "system", content: SYSTEM_PROMPT }];
+                    saveChatHistory();
+                    restoreChatUI();
                 });
             }
 
