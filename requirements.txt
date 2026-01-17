@@ -6,6 +6,7 @@ langchain-pinecone
 langchain-text-splitters
 langchain-google-genai
 langchain-huggingface
+langchain-ollama
 PyYAML
 python-dotenv
 reportlab
