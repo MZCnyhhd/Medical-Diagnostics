@@ -5,8 +5,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-> **注意**：本项目仅供研究与面试演示使用，严禁用于真实临床诊疗。
-
 ## 📖 项目简介
 
 这是一个基于 **多智能体协作 (Multi-Agent Collaboration)** 和 **RAG (检索增强生成)** 技术的智能医疗诊断系统。系统模拟了现实医院的**多学科会诊 (MDT)** 流程：
