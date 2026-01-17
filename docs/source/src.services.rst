@@ -4,6 +4,14 @@ src.services package
 Submodules
 ----------
 
+src.services.auth module
+------------------------
+
+.. automodule:: src.services.auth
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 src.services.cache module
 -------------------------
 
@@ -28,14 +36,6 @@ src.services.graph\_rag module
    :show-inheritance:
    :undoc-members:
 
-src.services.graph\_rag\_core\_code module
-------------------------------------------
-
-.. automodule:: src.services.graph_rag_core_code
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
 src.services.kg module
 ----------------------
 
@@ -52,14 +52,6 @@ src.services.llm module
    :show-inheritance:
    :undoc-members:
 
-src.services.llm\_core\_code module
------------------------------------
-
-.. automodule:: src.services.llm_core_code
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
 src.services.logging module
 ---------------------------
 
@@ -72,14 +64,6 @@ src.services.rag module
 -----------------------
 
 .. automodule:: src.services.rag
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-src.services.rag\_core\_code module
------------------------------------
-
-.. automodule:: src.services.rag_core_code
    :members:
    :show-inheritance:
    :undoc-members:

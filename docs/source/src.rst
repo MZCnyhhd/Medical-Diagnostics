@@ -12,6 +12,7 @@ Subpackages
    src.services
    src.tools
    src.ui
+   src.utils
 
 Module contents
 ---------------
