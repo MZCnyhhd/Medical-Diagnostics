@@ -1,12 +1,41 @@
 # [导入模块] ############################################################################################################
 # [标准库 | Standard Libraries] =========================================================================================
-import asyncio                                                         # 异步编程：并发任务调度
+"""
+模块名称: Diagnosis Orchestrator (诊断流程编排器)
+
+功能描述:
+
+    作为系统的"中枢神经"，负责协调和串联整个医疗诊断流程。
+    从接收用户输入开始，依次执行分诊 (Triage)、多学科会诊 (MDT)、综合诊断生成等步骤。
+    管理全局状态和错误处理，通过生成器 (Generator) 模式向前端流式反馈进度。
+
+设计理念:
+
+    1.  **流程管道化**: 将诊断过程抽象为 Step-by-Step 的管道 (Pipeline)，便于维护和扩展。
+    2.  **流式反馈**: 使用 `yield` 关键字实时产出进度信息，提升用户体验 (避免长时间白屏)。
+    3.  **容错设计**: 在关键步骤 (如 RAG 检索、模型调用) 包含异常捕获，确保流程不中断。
+
+线程安全性:
+
+    - 编排器本身通常在 Streamlit 的脚本线程中运行。
+    - 调用的子模块 (如 RAG, Agent) 可能包含异步或并发操作。
+
+依赖关系:
+
+    - `src.core.triage`: 分诊模块。
+    - `src.agents.base`: 智能体模块。
+    - `src.services.graph_rag`: 检索服务。
+"""
+
+import asyncio
+import json
 import time                                                            # 时间工具：性能计时
 # [内部模块 | Internal Modules] =========================================================================================
 from src.agents.base import Agent, 多学科团队, PROMPTS_CONFIG            # 智能体：专科医生与 MDT 团队
 from src.services.logging import log_info, log_warn, log_error         # 统一日志服务
 from src.core.triage import triage_specialists                         # 智能分诊：动态选择专科
 from src.services.cache import get_cache, DiagnosisCache               # 缓存服务：诊断结果复用
+from src.services.graph_rag import retrieve_hybrid_knowledge_snippets  # 检索增强
 from src.core.settings import get_settings                             # 系统配置：超时、并发等参数
 # [定义函数] ############################################################################################################
 # [异步-外部-生成诊断] ====================================================================================================
@@ -36,10 +65,20 @@ async def generate_diagnosis(medical_report: str, use_cache: bool = True):
     if not selected_names:
         selected_names = available_specialists
     yield "Status", f"已启动专家会诊：{'、'.join(selected_names)}"
-    # [step4] 并发专科诊断：创建 Agent 实例并并发执行
-    agents = {name: Agent(medical_report, role=name) for name in selected_names}
+    yield "Status", "正在检索相关医学知识..."
+    # [step4] 预检索 RAG 上下文 (优化：一次检索，多次复用)
+    rag_context = None
+    try:
+        # 在 Executor 中执行 RAG 检索，避免阻塞事件循环
+        # 注意：这里简化为直接调用，如果 retrieve_hybrid_knowledge_snippets 内部耗时严重，建议放到 thread pool
+        rag_context = retrieve_hybrid_knowledge_snippets(medical_report)
+    except Exception as e:
+        log_warn(f"[Orchestrator] RAG 预检索失败: {e}")
+
+    # [step5] 并发专科诊断：创建 Agent 实例并并发执行 (注入 RAG 上下文)
+    agents = {name: Agent(medical_report, role=name, rag_context=rag_context) for name in selected_names}
     responses = await _run_all_agents(agents, settings)
-    # [step5] 逐个输出专科诊断结果
+    # [step6] 逐个输出专科诊断结果
     for agent_name, response in responses.items():
         yield agent_name, response
     # [step6] MDT 综合诊断：汇总专科报告，执行 ReAct 推理

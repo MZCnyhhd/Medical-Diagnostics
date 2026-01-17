@@ -125,3 +125,13 @@ local_vector_index/
 Results/
 tests/__pycache__/
 
+# Large Files & Model Offload
+offload/
+*.dat
+*.bin
+*.safetensors
+*.onnx
+*.gguf
+models/
+
+

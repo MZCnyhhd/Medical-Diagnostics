@@ -1,5 +1,6 @@
 # 🏥 医疗诊断 AI 智能体 (Medical Diagnostics AI Agent)
 
+[![Docs](https://img.shields.io/badge/docs-online-green.svg)](https://mzcnyhhd.github.io/Medical-Diagnostics/)
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)

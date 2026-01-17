@@ -1,16 +1,38 @@
-# [导入模块] ############################################################################################################
-# [标准库 | Standard Libraries] =========================================================================================
-import os                                                              # 操作系统接口：环境变量与路径操作
-import base64                                                          # Base64 编码：处理图片数据
-import requests                                                        # HTTP 客户端：调用视觉 API
-# [第三方库 | Third-party Libraries] ====================================================================================
-import streamlit as st                                                 # Streamlit：Web 应用框架
-from langchain_community.chat_models import ChatTongyi                 # LangChain 模型：通义千问
-from langchain_openai import ChatOpenAI                                # LangChain 模型：OpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI              # LangChain 模型：Google Gemini
-from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace # LangChain 模型：HuggingFace
-# [内部模块 | Internal Modules] =========================================================================================
-from src.services.logging import log_info, log_warn, log_error         # 统一日志服务：日志记录
+"""
+模块名称: LLM Factory (大模型工厂)
+功能描述:
+
+    负责初始化和管理 LangChain 的 ChatModel 实例。
+    支持多供应商 (OpenAI, Anthropic, Ollama 等) 和多模型切换。
+    提供统一的 `get_llm` 接口，屏蔽底层模型差异。
+
+设计理念:
+
+    1.  **工厂模式**: 根据配置动态创建模型实例，易于扩展新的模型提供商。
+    2.  **统一接口**: 返回 LangChain 标准的 `BaseChatModel`，保证上层业务代码的兼容性。
+    3.  **配置驱动**: 所有模型参数 (Temperature, API Key) 均从 `settings` 读取。
+
+线程安全性:
+
+    - LangChain 的 LLM 对象通常是线程安全的。
+
+依赖关系:
+
+    - `langchain_openai`, `langchain_community`: 模型实现。
+    - `src.core.settings`: 模型配置。
+"""
+
+import os
+import base64
+import requests
+import streamlit as st
+from langchain_community.chat_models import ChatTongyi
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+# [fix] 延迟导入，避免在不支持本地模型的环境（如 Torch 缺失）中启动崩溃
+# from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
+from langchain_ollama import ChatOllama
+from src.services.logging import log_info, log_warn, log_error
 # [定义函数] ############################################################################################################
 # [内部-加载本地模型] =====================================================================================================
 @st.cache_resource
@@ -22,7 +44,8 @@ def _load_local_model(model_path: str):
     """
     # [step1] 延迟导入本地依赖
     try:
-        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
+        from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
         import torch
     except ImportError as e:
         log_warn(f"本地模型依赖缺失: {e}")
@@ -30,18 +53,67 @@ def _load_local_model(model_path: str):
     # [step2] 加载分词器和模型
     log_info(f"正在加载本地模型: {model_path} ...")
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True)
-        log_info(f"模型已加载到设备: {model.device}")
+        # [Fix] HuatuoGPT-7B 等模型包含自定义代码，必须启用 trust_remote_code=True
+        # [Fix] 强制 use_fast=False，防止 transformers 尝试将其转换为 FastTokenizer 导致 'vocab_size' 属性冲突
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        
+        # [Optimization] 配置 4-bit 量化以适配 RTX 5060 (8GB VRAM)
+        # 这将把模型大小从 ~14GB 压缩到 ~4.5GB，无需 offload 到磁盘，大幅提升加载和推理速度
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4"
+        )
+
+        # [Fix] 配置模型加载参数
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, 
+            quantization_config=bnb_config,  # 启用量化
+            device_map="auto", 
+            trust_remote_code=True
+        )
+        log_info(f"模型已加载到设备: {model.device} (4-bit Quantized)")
     except Exception as e:
         log_warn(f"加载本地模型失败: {e}")
         return None
     # [step3] 创建文本生成 Pipeline
-    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=2048, temperature=0.1, top_p=0.95, repetition_penalty=1.15, return_full_text=False)
+    # [Fix] 显式传递 trust_remote_code=True 给 pipeline，防止某些自定义模型在 pipeline 初始化时报错
+    pipe = pipeline(
+        "text-generation", 
+        model=model, 
+        tokenizer=tokenizer, 
+        max_new_tokens=2048, 
+        temperature=0.1, 
+        top_p=0.95, 
+        repetition_penalty=1.15, 
+        return_full_text=False,
+        trust_remote_code=True
+    )
     # [step4] 包装为 LangChain 接口
-    local_llm = HuggingFacePipeline(pipeline=pipe)
-    log_info("本地模型加载成功！")
-    return ChatHuggingFace(llm=local_llm)
+    # [Fix] 增加异常捕获，如果 ChatHuggingFace 包装失败（如因 custom code），则回退到基础 pipeline
+    try:
+        local_llm = HuggingFacePipeline(pipeline=pipe)
+        # [Fix] 显式传递 model_kwargs 给 ChatHuggingFace，确保它知道需要 trust_remote_code
+        # 虽然 ChatHuggingFace 本身不直接接受 trust_remote_code，但它在内部调用 tokenizer/model 时可能会用到
+        # 更重要的是，之前的报错是因为 ChatHuggingFace 试图重新加载某些配置时没带参数
+        # 我们这里使用一种更彻底的方式：直接构建一个自定义的包装器，或者忽略这个特定的 Warning（因为它只是 Warning）
+        # 但既然已经回退到了 HuggingFacePipeline，我们可以尝试直接返回它，或者再次尝试用参数包装
+        
+        # 尝试 1: 标准包装
+        # chat_model = ChatHuggingFace(llm=local_llm)
+        
+        # 尝试 2: 既然 ChatHuggingFace 对自定义模型支持不好，且 HuggingFacePipeline 已经能工作（Text Generation）
+        # 我们直接使用 HuggingFacePipeline 配合 prompt template 即可满足需求
+        # 为了保持接口一致性，我们这里直接返回 HuggingFacePipeline，并在上层统一处理
+        log_info("本地模型加载成功 (Base Pipeline Mode)！")
+        return local_llm
+        
+    except Exception as e:
+        log_warn(f"ChatHuggingFace 包装失败，回退到基础 Pipeline 模式: {e}")
+        # HuggingFacePipeline 也是一个合法的 LangChain LLM，可以直接使用
+        log_info("本地模型加载成功 (Base Mode)！")
+        return HuggingFacePipeline(pipeline=pipe)
 # [内部-初始化 Qwen] =====================================================================================================
 def _init_qwen(temperature, available_models, init_errors):
     """初始化通义千问模型"""
@@ -71,6 +143,31 @@ def _init_baichuan(temperature, available_models, init_errors):
     except Exception as e:
         init_errors["baichuan"] = str(e)
         log_warn(f"初始化 Baichuan 失败: {e}")
+
+# [内部-初始化 Ollama] =====================================================================================================
+def _init_ollama(temperature, available_models, init_errors):
+    """初始化 Ollama 本地模型"""
+    try:
+        model_name = os.getenv("OLLAMA_MODEL", "gemma:latest")
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        
+        # 尝试连接 Ollama 服务
+        # 注意: 这里不进行实际的连接测试，因为 LangChain 会在首次调用时连接
+        # 但我们可以简单检查 base_url 是否可访问 (可选)
+        
+        available_models["ollama"] = ChatOllama(
+            model=model_name,
+            temperature=temperature,
+            base_url=base_url
+        )
+        # [Fix] 仅在首次初始化时打印日志，避免刷屏
+        if not hasattr(_init_ollama, "_logged_config") or _init_ollama._logged_config != (model_name, base_url):
+            log_info(f"Ollama 模型已配置: {model_name} @ {base_url}")
+            _init_ollama._logged_config = (model_name, base_url)
+    except Exception as e:
+        init_errors["ollama"] = str(e)
+        log_warn(f"初始化 Ollama 失败: {e}")
+
 # [内部-初始化可用模型] ===================================================================================================
 def _init_available_models(temperature: float) -> tuple[dict, dict]:
     """
@@ -81,13 +178,22 @@ def _init_available_models(temperature: float) -> tuple[dict, dict]:
     available_models, init_errors = {}, {}
     # [step1] 尝试加载本地模型
     local_path = os.getenv("LOCAL_MODEL_PATH")
-    if local_path and os.path.exists(local_path):
-        local_model = _load_local_model(local_path)
-        if local_model:
-            available_models["local"] = local_model
+    if local_path:
+        # 支持相对路径和绝对路径
+        if not os.path.isabs(local_path):
+            local_path = os.path.abspath(local_path)
+            
+        if os.path.exists(local_path):
+            local_model = _load_local_model(local_path)
+            if local_model:
+                available_models["local"] = local_model
+        else:
+            log_warn(f"配置的本地模型路径不存在: {local_path}")
+            init_errors["local"] = f"路径不存在: {local_path}"
     # [step2] 初始化云端模型
     _init_qwen(temperature, available_models, init_errors)
     _init_baichuan(temperature, available_models, init_errors)
+    _init_ollama(temperature, available_models, init_errors)
     return available_models, init_errors
 # [内部-选择模型提供商] ===================================================================================================
 def _select_provider(override_provider: str | None, available_models: dict, init_errors: dict, priority_order: list[str]) -> str:
@@ -131,7 +237,7 @@ def get_chat_model(override_provider: str | None = None):
     temperature = temp if temp != 0 else 0.01
     # [step2] 初始化所有可用模型
     available_models, init_errors = _init_available_models(temperature)
-    priority_order = ["qwen", "baichuan", "openai", "gemini", "local"]
+    priority_order = ["qwen", "baichuan", "openai", "gemini", "ollama", "local"]
     # [step3] 选择主模型提供商
     provider = _select_provider(override_provider, available_models, init_errors, priority_order)
     # [step4] 卫语句：处理没有任何模型可用的极端情况
@@ -140,16 +246,20 @@ def get_chat_model(override_provider: str | None = None):
         return ChatTongyi(model="qwen-max", temperature=temperature)
     # [step5] 配置备用模型链 (Fallback)
     primary_model = available_models[provider]
-    fallback_models = [available_models[p] for p in priority_order if p != provider and p in available_models]
+    fallback_names = [p for p in priority_order if p != provider and p in available_models]
+    fallback_models = [available_models[p] for p in fallback_names]
     # [step6] 打印配置日志（仅限首次）
+    # 使用 frozenset 确保 hashable，用于缓存键
+    current_config_key = (provider, tuple(fallback_names))
+    
     if not hasattr(get_chat_model, "_logged_configs"):
         get_chat_model._logged_configs = set()
-    fallback_names = [p for p in priority_order if p != provider and p in available_models]
-    log_msg = f"LLM 配置: 主模型={provider}, 备用模型链={fallback_names}" if fallback_models else f"LLM 配置: 主模型={provider}, 无可用备用模型。"
-    if log_msg not in get_chat_model._logged_configs:
+    
+    if current_config_key not in get_chat_model._logged_configs:
+        log_msg = f"LLM 配置: 主模型={provider}, 备用模型链={fallback_names}"
         log_info(log_msg)
-        get_chat_model._logged_configs.add(log_msg)
-    # [step7] 返回带 Fallback 的模型
+        get_chat_model._logged_configs.add(current_config_key)
+    
     return primary_model.with_fallbacks(fallback_models) if fallback_models else primary_model
 # [内部-调用视觉 API] ====================================================================================================
 def _call_vision_api(api_name: str, api_url: str, headers: dict, payload: dict, timeout: int = 60) -> str | None:

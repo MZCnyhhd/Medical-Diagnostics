@@ -1,17 +1,23 @@
 """
-知识图谱构建脚本：从医学知识库 Markdown 文档中抽取结构化知识并构建 Neo4j 知识图谱
+模块名称: Knowledge Graph Builder (图谱构建脚本)
+功能描述:
 
-使用方法：
-1. 确保 Neo4j 数据库已启动并配置好连接信息（环境变量或 config/apikey.env）
-2. 运行脚本：python src/scripts/build_kg.py
+    离线脚本，用于从原始医疗文本 (Markdown) 构建 Neo4j 知识图谱。
+    解析结构化文本，提取实体和关系，批量写入图数据库。
 
-脚本会：
-- 读取 data/knowledge_base/ 下的所有 .md 文件
-- 使用 LLM 抽取结构化知识（疾病、症状、检查、治疗、科室）
-- 将抽取的知识写入 Neo4j 知识图谱
+设计理念:
 
-注意：本脚本调用的知识图谱服务方法已使用 Neo4j 的 MERGE 操作，
-可以自动防止创建重复的实体和关系，因此可安全地重复运行。
+    1.  **ETL 流程**: Extract (读取 Markdown), Transform (解析实体关系), Load (写入 Neo4j)。
+    2.  **幂等性**: 支持重复运行 (通常会先清库或 merge)，确保数据一致性。
+    3.  **批处理**: 虽然目前可能是逐条处理，但设计上应考虑批量写入以提高效率。
+
+线程安全性:
+
+    - 脚本通常单线程运行。
+
+依赖关系:
+
+    - `src.services.kg`: 图谱操作。
 """
 
 import os
@@ -21,20 +27,29 @@ import re
 import json
 from typing import Dict
 
+# [环境设置 | Environment Setup] ========================================================================================
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+# [第三方库 | Third-party Libraries] ====================================================================================
 from dotenv import load_dotenv
+
+# [内部模块 | Internal Modules] =========================================================================================
 from src.services.kg import get_kg
 from src.services.llm import get_chat_model
 from src.services.logging import log_info, log_warn, log_error
 from src.core.settings import APIKEY_ENV_PATH
 
 # 加载环境变量
-load_dotenv(dotenv_path=APIKEY_ENV_PATH, override=True)
+try:
+    load_dotenv(dotenv_path=APIKEY_ENV_PATH, override=True, encoding="utf-8")
+except UnicodeDecodeError:
+    load_dotenv(dotenv_path=APIKEY_ENV_PATH, override=True, encoding="gbk")
 
 
+# [定义函数] ############################################################################################################
+# [脚本-提取疾病名称] ======================================================================================================
 def extract_disease_name_from_file(file_path: Path) -> str:
     """
     从文件名提取疾病名称（去掉 .md 后缀）
@@ -48,6 +63,7 @@ def extract_disease_name_from_file(file_path: Path) -> str:
     return file_path.stem
 
 
+# [脚本-抽取结构化知识] ====================================================================================================
 def extract_structured_knowledge(content: str, disease_name: str) -> Dict:
     """
     使用 LLM 从医学文档中抽取结构化知识
@@ -59,8 +75,10 @@ def extract_structured_knowledge(content: str, disease_name: str) -> Dict:
     Returns:
         结构化知识字典，包含症状、检查、治疗、科室等信息
     """
+    # [step1] 获取 LLM 实例
     llm = get_chat_model()
     
+    # [step2] 构建提示词
     prompt = f"""
 你是一位医学知识抽取专家。请从以下医学文档中提取结构化知识。
 
@@ -82,15 +100,17 @@ def extract_structured_knowledge(content: str, disease_name: str) -> Dict:
 """
     
     try:
+        # [step3] 调用 LLM
         response = llm.invoke(prompt)
         text = getattr(response, "content", str(response))
         
-        # 清理文本，提取 JSON
+        # [step4] 清理文本，提取 JSON
         text = text.strip()
         # 移除可能的 markdown 代码块标记
         text = re.sub(r'```json\s*', '', text)
         text = re.sub(r'```\s*', '', text)
         
+        # [step5] 解析 JSON
         # 尝试找到 JSON 对象
         start = text.find('{')
         end = text.rfind('}') + 1
@@ -105,6 +125,7 @@ def extract_structured_knowledge(content: str, disease_name: str) -> Dict:
         return {}
 
 
+# [脚本-映射科室名称] ======================================================================================================
 def map_department_name(department: str) -> str:
     """
     将科室名称映射到标准格式
@@ -115,7 +136,7 @@ def map_department_name(department: str) -> str:
     Returns:
         标准化的科室名称
     """
-    # 科室名称映射表
+    # [step1] 定义科室名称映射表
     mapping = {
         "心脏科": "心脏科医生",
         "心内科": "心脏科医生",
@@ -138,19 +159,20 @@ def map_department_name(department: str) -> str:
         "呼吸科": "肺科医生",
     }
     
-    # 尝试精确匹配
+    # [step2] 尝试精确匹配
     if department in mapping:
         return mapping[department]
     
-    # 尝试部分匹配
+    # [step3] 尝试部分匹配
     for key, value in mapping.items():
         if key in department or department in key:
             return value
     
-    # 如果都不匹配，返回原名称（去掉"医生"后缀）
+    # [step4] 默认处理：如果都不匹配，返回原名称（去掉"医生"后缀并尝试规范化）
     return department.replace("医生", "").replace("科", "科医生")
 
 
+# [脚本-构建知识图谱] ======================================================================================================
 def build_knowledge_graph(knowledge_base_dir: Path = None):
     """
     构建知识图谱
@@ -158,6 +180,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
     Args:
         knowledge_base_dir: 知识库目录路径，默认 data/knowledge_base
     """
+    # [step1] 确定知识库目录
     if knowledge_base_dir is None:
         knowledge_base_dir = project_root / "data" / "knowledge_base"
     
@@ -165,6 +188,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
         log_error(f"[KG] 知识库目录不存在: {knowledge_base_dir}")
         return
     
+    # [step2] 连接知识图谱
     kg = get_kg()
     if not kg.driver:
         log_error("[KG] Neo4j 连接失败，无法构建知识图谱")
@@ -172,13 +196,14 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
     
     log_info(f"[KG] 开始构建知识图谱，知识库目录: {knowledge_base_dir}")
     
-    # 获取所有 Markdown 文件
+    # [step3] 获取所有 Markdown 文件
     md_files = list(knowledge_base_dir.glob("*.md"))
     log_info(f"[KG] 找到 {len(md_files)} 个医学文档")
     
     success_count = 0
     error_count = 0
     
+    # [step4] 遍历处理每个文件
     for i, file_path in enumerate(md_files, 1):
         disease_name = extract_disease_name_from_file(file_path)
         log_info(f"[KG] [{i}/{len(md_files)}] 处理: {disease_name}")
@@ -195,11 +220,11 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
                 error_count += 1
                 continue
             
-            # 创建疾病实体
+            # [step4.1] 创建疾病实体
             description = knowledge.get("description", "")
             kg.create_disease(disease_name, description)
             
-            # 创建症状实体并建立关系
+            # [step4.2] 创建症状实体并建立关系
             symptoms = knowledge.get("symptoms", [])
             for symptom in symptoms:
                 if symptom and symptom.strip():
@@ -207,7 +232,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
                     kg.create_symptom(symptom.strip())
                     kg.link_disease_symptom(disease_name, symptom.strip())
             
-            # 创建检查实体并建立关系
+            # [step4.3] 创建检查实体并建立关系
             examinations = knowledge.get("examinations", [])
             for exam in examinations:
                 if exam and exam.strip():
@@ -215,7 +240,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
                     kg.create_examination(exam.strip())
                     kg.link_disease_examination(disease_name, exam.strip())
             
-            # 创建治疗实体并建立关系
+            # [step4.4] 创建治疗实体并建立关系
             treatments = knowledge.get("treatments", [])
             for treatment in treatments:
                 if treatment and treatment.strip():
@@ -223,7 +248,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
                     kg.create_treatment(treatment.strip())
                     kg.link_disease_treatment(disease_name, treatment.strip())
             
-            # 创建科室实体并建立关系
+            # [step4.5] 创建科室实体并建立关系
             departments = knowledge.get("departments", [])
             for dept in departments:
                 if dept and dept.strip():
@@ -239,10 +264,10 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
             log_error(f"[KG] 处理 {disease_name} 时出错: {e}")
             error_count += 1
     
-    # 输出统计信息
+    # [step5] 输出统计信息
     log_info(f"[KG] 知识图谱构建完成！成功: {success_count}, 失败: {error_count}")
     
-    # 显示图谱统计
+    # [step6] 显示图谱统计
     stats = kg.get_statistics()
     if stats:
         log_info(f"[KG] 图谱统计:")

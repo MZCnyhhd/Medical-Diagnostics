@@ -1,7 +1,39 @@
+"""
+模块名称: UI Styles (界面样式)
+功能描述:
+
+    集中管理 Streamlit 应用的 CSS 样式。
+    覆盖 Streamlit 原生组件的默认样式，实现统一的视觉风格 (Typography, Color Palette, Spacing)。
+
+设计理念:
+
+    1.  **CSS-in-Python**: 将 CSS 作为字符串存储在 Python 代码中，便于动态注入。
+    2.  **原子化设计**: 尽量定义通用的 CSS Class，复用于多个组件。
+    3.  **响应式**: 适配不同屏幕尺寸 (虽然 Streamlit 本身已有较好支持)。
+
+线程安全性:
+
+    - 返回静态字符串，线程安全。
+
+依赖关系:
+
+    - 无。
+"""
 
 def get_css():
+    """
+    获取全局自定义 CSS 样式。
+    
+    包含：
+    1. 字体与全局重置
+    2. 侧边栏样式
+    3. 标题与按钮样式
+    4. 聊天消息气泡样式
+    5. 文件上传组件样式
+    """
     return """
 <style>
+    /* [step1] 全局基础样式 */
     /* 引入 Google Fonts (可选，如果网络允许) */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
@@ -329,8 +361,7 @@ def get_css():
         box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     }
     
-    /* --- Popover 聊天窗口优化 --- */
-    
+    /* [step5] Popover 与聊天窗口 */
     /* Popover 内容容器 - 增加宽度，去除内边距 */
     /* Popover 内容容器 - 强制固定在右下角 */
     div[data-testid="stPopoverBody"] {
@@ -350,22 +381,8 @@ def get_css():
         z-index: 10000 !important;
         transform: none !important;
     }
-    
-    /* 确保 iframe 填满容器 */
-    div[data-testid="stPopoverBody"] > div {
-        height: 100% !important;
-        min-height: 500px !important;
-    }
-    
-    div[data-testid="stPopoverBody"] iframe {
-        width: 100% !important;
-        min-height: 500px !important;
-        display: block !important;
-        margin: 0 !important;
-    }
 
-    /* --- 文件上传组件美化与汉化 --- */
-    
+    /* [step6] 文件上传组件美化 */
     /* 1. 拖拽区域样式优化 - 扩展至填满整个上传区域 */
     section[data-testid="stFileUploaderDropzone"] {
         background-color: #ffffff;

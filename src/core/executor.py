@@ -1,6 +1,25 @@
-# [导入模块] ############################################################################################################
-# [标准库 | Standard Libraries] =========================================================================================
-import json                                                            # JSON 解析：处理工具调用指令
+"""
+模块名称: Tool Executor (工具执行器)
+
+功能描述:
+
+    提供 LLM 调用外部工具的统一执行入口。
+    实现了工具的注册、安全校验、参数解析和函数调用。
+    目前主要支持 `generate_structured_diagnosis` 等诊断辅助工具。
+
+设计理念:
+
+    1.  **安全沙箱**: 通过 `ALLOWED_TOOLS` 白名单机制，严格限制 AI 可调用的函数，防止恶意代码执行。
+    2.  **统一接口**: 所有工具调用通过 `execute_tool_call` 统一分发，便于日志记录和异常处理。
+    3.  **JSON 协议**: 遵循 LLM function calling 的 JSON 格式标准，解析 `{"tool": "name", "args": {...}}`。
+
+依赖关系:
+
+    - `src.tools.common`: 具体的工具函数实现。
+"""
+
+import json
+import traceback
 from typing import Any, Dict                                           # 类型提示
 # [内部模块 | Internal Modules] =========================================================================================
 from src.tools.common import generate_structured_diagnosis             # 结构化诊断工具

@@ -1,7 +1,30 @@
+"""
+模块名称: Vector RAG Service (向量检索服务)
+功能描述:
+
+    封装向量数据库 (如 Pinecone, FAISS, Chroma) 的操作。
+    负责文本 Embedding 向量化、文档切片 (Chunking) 和相似度检索。
+
+设计理念:
+
+    1.  **抽象基类**: 虽然目前可能只实现了一种向量库，但设计上预留了切换后端的可能性。
+    2.  **按需加载**: 只有在启用 RAG 功能时才初始化向量库连接，节省资源。
+    3.  **Top-K 策略**: 允许动态调整检索返回的文档数量 (k)，平衡上下文长度和覆盖率。
+
+线程安全性:
+
+    - 依赖底层向量库 SDK 的线程安全性。
+
+依赖关系:
+
+    - `langchain_community.vectorstores`: 向量库接口。
+    - `langchain_openai`: Embeddings 模型。
+"""
+
 # [导入模块] ############################################################################################################
 # [标准库 | Standard Libraries] =========================================================================================
 import os                                                              # 操作系统接口：环境变量与路径操作
-from typing import List, Any, Optional                                 # 类型提示：类型注解支持
+from typing import List, Any, Optional, Dict                           # 类型提示：类型注解支持
 # [第三方库 | Third-party Libraries] ====================================================================================
 from langchain_pinecone import PineconeVectorStore, PineconeEmbeddings # Pinecone：云端向量存储
 # 尝试导入 FAISS 以用于类型提示，如果不可用则忽略（实际使用在函数内部再次导入或处理）
@@ -10,7 +33,7 @@ try:
 except ImportError:
     FAISS = Any
 # [内部模块 | Internal Modules] =========================================================================================
-from src.services.logging import log_warn                              # 统一日志服务：警告日志
+from src.services.logging import log_info, log_warn, log_error                              # 统一日志服务：警告日志
 # [定义函数] ############################################################################################################
 # [内部- RAG 是否已启用] ==================================================================================================
 def _is_rag_enabled() -> bool:
@@ -45,10 +68,17 @@ def _load_local_faiss() -> Optional["FAISS"]:
         from langchain_huggingface import HuggingFaceEmbeddings
     except ImportError as e:
         log_warn(f"[RAG] 本地模式依赖缺失: {e}")
+        log_warn("[RAG] 尝试自动修复：pip install sentence-transformers langchain-huggingface")
         return None
     # [step2] 获取本地嵌入模型
     model_name = os.getenv("LOCAL_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    try:
+        log_info(f"[RAG] 正在初始化本地 Embedding 模型: {model_name} (首次运行可能需要下载)...")
+        embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        log_info(f"[RAG] 本地 Embedding 模型加载成功")
+    except Exception as e:
+        log_error(f"[RAG] 本地 Embedding 模型初始化失败: {e}")
+        return None
     # [step3] 检查索引目录是否存在
     save_path = "local_vector_index"
     if not os.path.exists(save_path):
@@ -89,11 +119,22 @@ def _get_vectorstore() -> Any:
     # [step1] 卫语句：RAG 未启用直接返回
     if not _is_rag_enabled():
         return None
-    # [step2] 检查是否使用本地模式
+    
+    # [step2] 自动策略选择
+    # 策略 1: 显式开启 USE_LOCAL_RAG
+    # 策略 2: 使用本地 LLM (local) 时，默认优先尝试本地 RAG
+    llm_provider = os.getenv("LLM_PROVIDER", "qwen").lower()
     use_local_rag = os.getenv("USE_LOCAL_RAG", "false").lower() == "true"
-    if use_local_rag:
-        return _load_local_faiss()
-    # [step3] 默认使用云端 Pinecone
+    should_try_local = use_local_rag or (llm_provider == "local")
+
+    if should_try_local:
+        log_info("[RAG] 尝试加载本地向量知识库 (策略: 优先本地)...")
+        vs = _load_local_faiss()
+        if vs:
+            return vs
+        log_warn("[RAG] 本地向量库加载失败，尝试降级使用 Pinecone 云端向量库...")
+    
+    # [step3] 默认/降级使用云端 Pinecone
     return _load_pinecone_index()
 # [外部-知识检索] ========================================================================================================
 def retrieve_knowledge_snippets(query: str, k: int = 3) -> str:

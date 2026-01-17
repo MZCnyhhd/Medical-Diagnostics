@@ -1,20 +1,43 @@
-# [导入模块] ############################################################################################################
-# [标准库 | Standard Libraries] =========================================================================================
-import re                                                              # 文本模式匹配与复杂字符串解析
-import json                                                            # 结构化数据序列化与反序列化
-# [第三方库 | Third-party Libraries] ====================================================================================
-import yaml                                                            # 系统配置文件加载与解析
-from langchain_core.prompts import PromptTemplate                      # 提示词工程：动态模板构建
-from tenacity import (
-    retry,                                                             # 容错机制：失败自动重试策略
-    stop_after_attempt,                                                # 重试限制：最大尝试次数控制
-    wait_exponential                                                   # 指数退避：重试间隔时间优化
-)
+"""
+模块名称: Base Agent & MDT (智能体基类与多学科团队)
+
+功能描述:
+
+    定义了系统中所有 AI 医生的基类 `Agent` 和 MDT (Multi-Disciplinary Team) 类。
+    实现 Agent 的生命周期管理：提示词构建 -> 上下文组装 -> LLM 调用 -> 结果解析。
+    MDT 负责综合多位专科医生的意见，进行 ReAct 推理，最终生成综合诊断。
+
+设计理念:
+
+    1.  **角色扮演**: 每个 Agent 实例通过特定的 System Prompt 扮演不同的专科医生。
+    2.  **RAG 增强**: 自动集成向量检索和知识图谱检索结果，增强 Agent 的上下文。
+    3.  **ReAct 框架**: MDT 具备 "Reasoning + Acting" 能力，可调用工具 (如生成结构化诊断) 并基于结果进行二次推理。
+    4.  **异步并发**: 专科医生会诊 (Specialist Consultation) 支持并发执行，提高响应速度。
+
+线程安全性:
+
+    - Agent 实例通常在 `orchestrator` 中并发执行 (多线程或协程)。
+    - `history` 属性在多轮对话中需注意并发写安全 (目前设计为单次请求生命周期，无跨请求共享状态，相对安全)。
+
+依赖关系:
+
+    - `src.services.llm`: 模型推理。
+    - `src.core.executor`: 工具调用执行器。
+"""
+
+import re
+import json
+import asyncio
+import yaml
+from typing import Dict, Any, List, Optional
+from langchain_core.prompts import PromptTemplate
+from tenacity import retry, stop_after_attempt, wait_exponential
 # [内部模块 | Internal Modules] =========================================================================================
 from src.services.llm import get_chat_model                            # 模型工厂：初始化大语言模型实例
 from src.core.executor import execute_tool_call                        # 动作执行器：处理 Agent 工具调用指令
 from src.services.logging import log_info, log_error, log_warn         # 统一日志服务：结构化运行状态追踪
 from src.services.graph_rag import retrieve_hybrid_knowledge_snippets  # 检索增强：知识图谱与向量混合检索
+from src.tools.common import clean_llm_json_response                   # 工具集：通用工具函数
 # [定义函数] ############################################################################################################
 # [外部-加载提示词] =======================================================================================================
 def load_prompts() -> dict:
@@ -138,17 +161,19 @@ class Agent:  # Agent 代理
     """
     # [定义方法] ---------------------------------------------------------------------------------------------------------
     # [实例初始化] .......................................................................................................
-    def __init__(self, medical_report: str = None, role: str = None, extra_info: dict = None):
+    def __init__(self, medical_report: str = None, role: str = None, extra_info: dict = None, rag_context: str = None):
         """
         初始化智能体实例。
         :param medical_report: 待分析的医疗报告文本
         :param role: 智能体角色名称（如"心血管专家"）
         :param extra_info: 扩展信息字典，供子类使用
+        :param rag_context: 预检索的 RAG 上下文（可选）
         """
         # [step1] 绑定核心属性
         self.medical_report = medical_report
         self.role = role
         self.extra_info = extra_info
+        self.rag_context = rag_context
         # [step2] 构建角色专属提示词模板
         self.prompt_template = self.create_prompt_template()
         # [step3] 初始化大语言模型实例
@@ -214,13 +239,18 @@ class Agent:  # Agent 代理
         log_info(f"{self.role} 智能体正在运行……")
         # [step1] 基础提示词构建
         prompt = self.prompt_template.format(medical_report=self.medical_report)
-        # [step2] 卫语句：无报告或无 RAG 知识则直接返回
+        # [step2] 卫语句：无报告则直接返回
         if not self.medical_report:
             return prompt
-        rag_context = retrieve_hybrid_knowledge_snippets(self.medical_report)
+        
+        # [step3] 获取 RAG 上下文 (优先使用预注入的上下文)
+        rag_context = self.rag_context
+        if not rag_context:
+            rag_context = retrieve_hybrid_knowledge_snippets(self.medical_report)
+            
         if not rag_context:
             return prompt
-        # [step3] 组合结构化增强提示词
+        # [step4] 组合结构化增强提示词
         return (
             "### 参考医学知识 (RAG)\n"
             "以下是从权威医学库检索到的相关信息，请结合参考：\n"
@@ -263,7 +293,7 @@ class 多学科团队(Agent):
                 activate_reports.append(f"{agent_name}报告：{report_content}")
                 active_specialists.append(agent_name)
         # [step2] 格式化报告文本和专家名单
-        reposts_text = "\n".join(activate_reports)
+        reports_text = "\n".join(activate_reports)
         specialists_text = "、".join(active_specialists)
         # [step3] 从 YAML 获取模板，若缺失则使用兜底模板
         template_str = PROMPTS_CONFIG.get("multidisciplinary_team", "")
@@ -282,7 +312,7 @@ class 多学科团队(Agent):
         # [step4] 预填充固定变量并返回模板
         return PromptTemplate.from_template(template_str).partial(
             specialists_text=specialists_text,
-            reposts_text=reposts_text
+            reports_text=reports_text
         )
     # [异步-外部-实例] ...................................................................................................
     async def run_react_async(self, max_steps: int = 2):
@@ -302,10 +332,11 @@ class 多学科团队(Agent):
             if not isinstance(data, dict):
                 return data  # 解析失败直接返回原文本
             # [step3] 记录当前步骤的思考过程
-            log_info(f"[ReAct Step {step+1}] Thought: {data.get('thought')}")
+            log_info(f"[ReAct Step {step+1}/{max_steps}] Thought: {data.get('thought')}")
             history.append({"thought": data.get("thought"), "tool": data.get("tool")})
             # [step4] 检查是否达成最终答案
             if final_answer := data.get("final_answer"):
+                log_info("[ReAct] 模型给出了最终答案 (Final Answer)。")
                 return final_answer
             # [step5] 执行工具调用
             observation = self._execute_tool(data.get("tool"), data.get("args") or {})
@@ -314,6 +345,7 @@ class 多学科团队(Agent):
             # [step6] 格式化观察结果并返回
             issues = _extract_issues(observation)
             if formatted := _format_issues_markdown(issues):
+                log_info("[ReAct] 已从工具输出中提取有效诊断，提前结束推理循环。")
                 return formatted
         return None
     # [内部-实例] .......................................................................................................
@@ -328,7 +360,7 @@ class 多学科团队(Agent):
             "你是一支多学科医疗团队，正在使用 ReAct 策略进行推理。"
             "请只输出一个 JSON，格式如下：{\"thought\": \"...\", \"tool\": \"...\", \"args\": {...}, \"final_answer\": \"...\"}。"
             "非常重要的规则：\n"
-            "1）首步必须设置 tool = \"generate_structured_diagnosis\" 并提供 args。\n"
+            "1）首步必须设置 tool = \"generate_structured_diagnosis\"。args 必须包含 'issues' 列表，例如：{\"issues\": [{\"name\": \"疾病名\", \"reason\": \"理由\", \"suggestion\": \"建议\"}]}。\n"
             "2）观测到结果后，必须设置 tool = null 并给出 final_answer。\n"
             "3）final_answer 必须使用 Markdown 格式（使用 ### 标题和 - 列表）。"
         )
@@ -344,11 +376,9 @@ class 多学科团队(Agent):
         try:
             return json.loads(raw_text)
         except Exception:
-            # [step2] 清洗：移除 DeepSeek 等模型的 <think> 标签
-            clean_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
-            # [step3] 清洗：移除 Markdown JSON 代码块标记
-            clean_text = clean_text.replace("```json", "").replace("```", "").strip()
-            # [step4] 再次尝试解析
+            # [step2] 使用公共工具清洗，替代原本的重复代码
+            clean_text = clean_llm_json_response(raw_text)
+            # [step3] 再次尝试解析
             try:
                 return json.loads(clean_text)
             except:

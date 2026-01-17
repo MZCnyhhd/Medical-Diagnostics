@@ -1,17 +1,48 @@
-import streamlit as st
-import json
+"""
+模块名称: Chat Component (聊天组件)
+功能描述:
 
+    提供一个嵌入式的前端聊天界面组件 (基于 HTML/JS)。
+    解决 Streamlit 原生聊天组件刷新整个页面的问题，实现流畅的流式对话体验。
+    直接与 LLM API 通信，减少中间层延迟。
+
+设计理念:
+
+    1.  **客户端渲染**: 将对话渲染逻辑移至前端 (Browser)，减轻 Streamlit Server 压力。
+    2.  **无刷新交互**: 避免 Streamlit 的 rerun 机制导致的页面闪烁。
+    3.  **独立性**: 组件内部封装了 API 调用逻辑，与后端业务逻辑解耦。
+
+线程安全性:
+
+    - 纯前端组件，不涉及 Python 后端线程安全问题。
+
+依赖关系:
+
+    - `streamlit.components.v1.html`: 用于嵌入自定义 HTML。
+"""
+
+import json
+import streamlit as st
+
+# [定义函数] ############################################################################################################
+# [UI-渲染聊天组件] =======================================================================================================
 def render_chat_component(api_key, base_url, model, system_prompt):
     """
-    Renders a client-side chat component that communicates directly with the LLM API.
-    This avoids Streamlit page refreshes during chat.
+    渲染客户端聊天组件（HTML/JS）。
+    该组件直接与 LLM API 通信，避免 Streamlit 页面刷新。
     
-    Note: Using .replace() instead of .format() to avoid conflicts with CSS/JS braces.
+    :param api_key: API 密钥
+    :param base_url: API 基础 URL
+    :param model: 模型名称
+    :param system_prompt: 系统提示词
     """
     
-    # Escape the system prompt for JS string safely
+    # [step1] 准备数据
+    # 安全地转义系统提示词，供 JS 使用
     system_prompt_json = json.dumps(system_prompt)
     
+    # [step2] 定义 HTML/CSS/JS 模板
+    # 注意：使用 .replace() 而不是 .format() 以避免与 CSS/JS 的花括号冲突
     html_code = """
     <!DOCTYPE html>
     <html lang="en">
