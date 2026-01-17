@@ -19,6 +19,14 @@ sys.path.insert(0, os.path.abspath('../../'))
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
+# Mock imports to avoid installing heavy dependencies in CI/CD
+autodoc_mock_imports = [
+    "torch", "transformers", "sentence_transformers", "faiss", "neo4j", 
+    "streamlit", "langchain", "langchain_core", "langchain_community", 
+    "langchain_huggingface", "langchain_ollama", "tenacity", "yaml",
+    "dashscope", "openai", "pinecone", "modelscope"
+]
+
 extensions = [
     'sphinx.ext.autodoc',      # 自动从代码提取文档
     'sphinx.ext.napoleon',     # 如果你用了 Google 或 NumPy 风格的注释，需要这个
