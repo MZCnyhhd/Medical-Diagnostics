@@ -25,7 +25,7 @@ from typing import Any, Dict                                           # 类型�
 from src.tools.common import generate_structured_diagnosis             # 结构化诊断工具
 # [创建全局变量] =========================================================================================================
 # 工具白名单：仅允许执行的安全工具
-ALLOWED_TOOLS = {
+ALLOWED_TOOLS: Dict[str, Any] = {
     "generate_structured_diagnosis": generate_structured_diagnosis,
 }
 # [定义函数] ############################################################################################################

@@ -28,8 +28,8 @@ from pathlib import Path
 from datetime import datetime
 
 # [全局变量] ============================================================================================================
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = PROJECT_ROOT / "data" / "medical_diagnostics.db"
+PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
+DB_PATH: Path = PROJECT_ROOT / "data" / "medical_diagnostics.db"
 
 # [定义函数] ############################################################################################################
 # [初始化-数据库] ========================================================================================================

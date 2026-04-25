@@ -35,7 +35,7 @@ from langchain_ollama import ChatOllama
 from src.services.logging import log_info, log_warn, log_error
 # [定义函数] ############################################################################################################
 # [内部-加载本地模型] =====================================================================================================
-@st.cache_resource
+@st.cache_resource(show_spinner="正在加载本地 AI 模型，请稍候...")
 def _load_local_model(model_path: str):
     """
     加载本地 HuggingFace 模型（带 Streamlit 缓存）。
@@ -55,11 +55,11 @@ def _load_local_model(model_path: str):
     try:
         # [Fix] HuatuoGPT-7B 等模型包含自定义代码，必须启用 trust_remote_code=True
         # [Fix] 强制 use_fast=False，防止 transformers 尝试将其转换为 FastTokenizer 导致 'vocab_size' 属性冲突
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
         
         # [Optimization] 配置 4-bit 量化以适配 RTX 5060 (8GB VRAM)
         # 这将把模型大小从 ~14GB 压缩到 ~4.5GB，无需 offload 到磁盘，大幅提升加载和推理速度
-        bnb_config = BitsAndBytesConfig(
+        bnb_config: BitsAndBytesConfig = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_use_double_quant=True,
@@ -67,7 +67,7 @@ def _load_local_model(model_path: str):
         )
 
         # [Fix] 配置模型加载参数
-        model = AutoModelForCausalLM.from_pretrained(
+        model: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
             model_path, 
             quantization_config=bnb_config,  # 启用量化
             device_map="auto", 
@@ -79,7 +79,7 @@ def _load_local_model(model_path: str):
         return None
     # [step3] 创建文本生成 Pipeline
     # [Fix] 显式传递 trust_remote_code=True 给 pipeline，防止某些自定义模型在 pipeline 初始化时报错
-    pipe = pipeline(
+    pipe: pipeline = pipeline(
         "text-generation", 
         model=model, 
         tokenizer=tokenizer, 
@@ -93,7 +93,7 @@ def _load_local_model(model_path: str):
     # [step4] 包装为 LangChain 接口
     # [Fix] 增加异常捕获，如果 ChatHuggingFace 包装失败（如因 custom code），则回退到基础 pipeline
     try:
-        local_llm = HuggingFacePipeline(pipeline=pipe)
+        local_llm: HuggingFacePipeline = HuggingFacePipeline(pipeline=pipe)
         # [Fix] 显式传递 model_kwargs 给 ChatHuggingFace，确保它知道需要 trust_remote_code
         # 虽然 ChatHuggingFace 本身不直接接受 trust_remote_code，但它在内部调用 tokenizer/model 时可能会用到
         # 更重要的是，之前的报错是因为 ChatHuggingFace 试图重新加载某些配置时没带参数
@@ -175,7 +175,8 @@ def _init_available_models(temperature: float) -> tuple[dict, dict]:
     :param temperature: 模型生成温度
     :return: (可用模型字典, 初始化错误字典)
     """
-    available_models, init_errors = {}, {}
+    available_models: dict = {}
+    init_errors: dict = {}
     # [step1] 尝试加载本地模型
     local_path = os.getenv("LOCAL_MODEL_PATH")
     if local_path:

@@ -413,6 +413,13 @@ def render_user_info_sidebar(authenticator: stauth.Authenticate, username: str) 
     :param authenticator: 认证器实例
     :param username: 当前用户名
     """
+    # Check if user is authenticated
+    authentication_status = st.session_state.get("authentication_status", False)
+    
+    # Only show user info and logout button if user is authenticated
+    if not authentication_status or not username:
+        return
+    
     # [step1] 获取用户信息
     role = get_user_role(username)
     name = get_user_display_name(username)
@@ -435,11 +442,14 @@ def render_user_info_sidebar(authenticator: stauth.Authenticate, username: str) 
             st.query_params["page"] = "user_management"
             st.rerun()
     
-    # [step4] 显示登出按钮
+    # [step4] 显示登出按钮（仅已登录的用户）
     try:
         authenticator.logout(button_name="🚪 退出登录", location="sidebar", key="logout_btn")
-    except TypeError:
-        authenticator.logout("🚪 退出登录", "sidebar", key="logout_btn")
+    except (TypeError, Exception):
+        try:
+            authenticator.logout("🚪 退出登录", "sidebar", key="logout_btn")
+        except Exception:
+            pass  # Silently fail if logout button cannot be displayed
 
 # [界面-渲染用户管理] =====================================================================================================
 def render_user_management() -> None:

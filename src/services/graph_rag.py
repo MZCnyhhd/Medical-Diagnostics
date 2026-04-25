@@ -63,7 +63,7 @@ class GraphRAGResult:
 # [内部- GraphRAG 是否启用] ==============================================================================================
 def _is_graph_rag_enabled() -> bool:
     """检测 Graph RAG 是否启用"""
-    flag = os.getenv("ENABLE_GRAPH_RAG", "true").strip().lower()
+    flag: str = os.getenv("ENABLE_GRAPH_RAG", "true").strip().lower()
     return flag not in {"0", "false", "no", "off"}
 # [内部-获取向量 k ] =====================================================================================================
 def _get_vector_k() -> int:
@@ -91,13 +91,13 @@ def _parse_entity_json(text: str) -> list[dict]:
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```\s*', '', text)
     # [step2] 提取 JSON 部分
-    start = text.find('{')
-    end = text.rfind('}') + 1
+    start: int = text.find('{')
+    end: int = text.rfind('}') + 1
     if start < 0 or end <= start:
         return []
     # [step3] 解析 JSON
     try:
-        data = json.loads(text[start:end])
+        data: dict = json.loads(text[start:end])
         return data.get("entities", [])
     except:
         return []
@@ -112,20 +112,20 @@ def extract_medical_entities(query: str) -> List[ExtractedEntity]:
     if not query or not query.strip():
         return []
     # [step2] 构建提示词
-    prompt = f"你是一位医学实体识别专家。请从以下医疗文本中提取关键的医学实体。\n文本内容：\n{query[:2000]}\n请提取以下类型的实体，并以 JSON 格式返回：\n{{\"entities\": [{{\"name\": \"实体名称\", \"type\": \"实体类型\", \"confidence\": 置信度}}, ...]}}\n实体类型：symptom(症状)、disease(疾病)、examination(检查)、treatment(治疗)、department(科室)\n置信度 range 0-1。只返回 JSON，不要返回其他文字。"
+    prompt: str = f"你是一位医学实体识别专家。请从以下医疗文本中提取关键的医学实体。\n文本内容：\n{query[:2000]}\n请提取以下类型的实体，并以 JSON 格式返回：\n{{\"entities\": [{{\"name\": \"实体名称\", \"type\": \"实体类型\", \"confidence\": 置信度}}, ...]}}\n实体类型：symptom(症状)、disease(疾病)、examination(检查)、treatment(治疗)、department(科室)\n置信度 range 0-1。只返回 JSON，不要返回其他文字。"
     # [step3] 调用 LLM
     try:
-        llm = get_chat_model()
-        response = llm.invoke(prompt)
-        text = getattr(response, "content", str(response))
+        llm: Any = get_chat_model()
+        response: Any = llm.invoke(prompt)
+        text: str = getattr(response, "content", str(response))
     except Exception as e:
         log_warn(f"[GraphRAG] 实体提取失败: {e}")
         return []
     # [step4] 解析结果
-    raw_entities = _parse_entity_json(text)
-    entities = []
+    raw_entities: List[dict] = _parse_entity_json(text)
+    entities: List[ExtractedEntity] = []
     for item in raw_entities:
-        name = item.get("name", "").strip()
+        name: str = item.get("name", "").strip()
         if name:
             entities.append(ExtractedEntity(
                 name=name,
@@ -137,23 +137,23 @@ def extract_medical_entities(query: str) -> List[ExtractedEntity]:
 # [内部-症状查疾病] =======================================================================================================
 def _query_diseases_by_symptoms(kg: KnowledgeGraph, symptoms: list[str], limit: int) -> List[RetrievalResult]:
     """根据症状查询可能的疾病"""
-    results = []
+    results: List[RetrievalResult] = []
     # [step1] 调用知识图谱查询症状关联的疾病
     try:
-        disease_matches = kg.find_diseases_by_symptoms(symptoms, limit=limit)
+        disease_matches: List[Dict] = kg.find_diseases_by_symptoms(symptoms, limit=limit)
     except Exception as e:
         log_warn(f"[GraphRAG] 症状-疾病查询失败: {e}")
         return results
     # [step2] 遍历匹配结果，构建 RetrievalResult
     for match in disease_matches:
-        disease_name = match.get("disease_name", "")
+        disease_name: str = match.get("disease_name", "")
         if not disease_name:
             continue
         # [step3] 提取字段并格式化内容
-        description = match.get("description", "")
-        match_count = match.get("match_count", 0)
-        matched_symptoms = match.get("matched_symptoms", [])
-        content = f"【疾病】{disease_name}\n"
+        description: str = match.get("description", "")
+        match_count: int = match.get("match_count", 0)
+        matched_symptoms: List[str] = match.get("matched_symptoms", [])
+        content: str = f"【疾病】{disease_name}\n"
         if description:
             content += f"描述：{description}\n"
         content += f"匹配症状：{', '.join(matched_symptoms)}（共 {match_count} 个匹配）"
@@ -168,10 +168,10 @@ def _query_diseases_by_symptoms(kg: KnowledgeGraph, symptoms: list[str], limit: 
 # [内部-疾病详情查询] =====================================================================================================
 def _query_disease_info(kg: KnowledgeGraph, disease_name: str) -> List[RetrievalResult]:
     """查询单个疾病的详细信息"""
-    results = []
+    results: List[RetrievalResult] = []
     # [step1] 调用知识图谱获取疾病详情
     try:
-        disease_info = kg.get_disease_info(disease_name)
+        disease_info: Optional[Dict] = kg.get_disease_info(disease_name)
     except Exception as e:
         log_warn(f"[GraphRAG] 疾病信息查询失败 ({disease_name}): {e}")
         return results
@@ -179,7 +179,7 @@ def _query_disease_info(kg: KnowledgeGraph, disease_name: str) -> List[Retrieval
     if not disease_info:
         return results
     # [step3] 构建疾病详情内容（按字段拼接）
-    content = f"【疾病详情】{disease_info.get('name', disease_name)}\n"
+    content: str = f"【疾病详情】{disease_info.get('name', disease_name)}\n"
     if disease_info.get("description"):
         content += f"描述：{disease_info['description']}\n"
     if disease_info.get("symptoms"):
@@ -199,8 +199,8 @@ def _query_disease_info(kg: KnowledgeGraph, disease_name: str) -> List[Retrieval
     ))
     # [step5] 查询并添加相关疾病（鉴别诊断）
     try:
-        related = kg.get_related_diseases(disease_name, limit=3)
-        related_names = [r.get("disease_name") for r in related if r.get("disease_name")]
+        related: List[Dict] = kg.get_related_diseases(disease_name, limit=3)
+        related_names: List[str] = [r.get("disease_name") for r in related if r.get("disease_name")]
         if related_names:
             results.append(RetrievalResult(
                 content=f"【鉴别诊断】与 {disease_name} 相关的疾病：{', '.join(related_names)}",
@@ -214,19 +214,19 @@ def _query_disease_info(kg: KnowledgeGraph, disease_name: str) -> List[Retrieval
 # [内部-搜索单个实体] =====================================================================================================
 def _search_single_entity(kg: KnowledgeGraph, entity: ExtractedEntity) -> List[RetrievalResult]:
     """搜索单个非症状/疾病实体"""
-    results = []
+    results: List[RetrievalResult] = []
     try:
-        search_results = kg.search_entities(entity.name)
+        search_results: List[Dict] = kg.search_entities(entity.name)
     except Exception as e:
         log_warn(f"[GraphRAG] 实体搜索失败 ({entity.name}): {e}")
         return results
     for sr in search_results[:2]:
-        entity_name = sr.get("name", "")
+        entity_name: str = sr.get("name", "")
         if not entity_name:
             continue
-        entity_type = sr.get("type", "未知")
-        description = sr.get("description", "")
-        content = f"【{entity_type}】{entity_name}"
+        entity_type: str = sr.get("type", "未知")
+        description: str = sr.get("description", "")
+        content: str = f"【{entity_type}】{entity_name}"
         if description:
             content += f"\n{description}"
         results.append(RetrievalResult(
@@ -248,11 +248,11 @@ def retrieve_from_knowledge_graph(entities: List[ExtractedEntity], kg: Knowledge
     # [step1] 卫语句：无实体或图谱不可用
     if not entities or not kg.driver:
         return []
-    results = []
+    results: List[RetrievalResult] = []
     # [step2] 按类型分组实体
-    symptoms = [e.name for e in entities if e.entity_type == "symptom"]
-    diseases = [e.name for e in entities if e.entity_type == "disease"]
-    other_entities = [e for e in entities if e.entity_type not in ("symptom", "disease")]
+    symptoms: List[str] = [e.name for e in entities if e.entity_type == "symptom"]
+    diseases: List[str] = [e.name for e in entities if e.entity_type == "disease"]
+    other_entities: List[ExtractedEntity] = [e for e in entities if e.entity_type not in ("symptom", "disease")]
     # [step3] 症状查疾病
     if symptoms:
         results.extend(_query_diseases_by_symptoms(kg, symptoms, limit))
@@ -273,17 +273,17 @@ def retrieve_from_vector_store(query: str, k: int = 3) -> List[RetrievalResult]:
     :return: 检索结果列表
     """
     # [step1] 调用底层向量检索接口
-    raw_result = retrieve_knowledge_snippets(query, k=k)
+    raw_result: str = retrieve_knowledge_snippets(query, k=k)
     # [step2] 卫语句：空结果直接返回
     if not raw_result:
         return []
     # [step3] 解析原始结果，转换为 RetrievalResult 列表
-    results = []
+    results: List[RetrievalResult] = []
     for line in raw_result.split('\n'):
         if not line.strip():
             continue
         # [step4] 移除 [参考N] 前缀，提取纯内容
-        content = re.sub(r'^\[参考\d+\]\s*', '', line.strip())
+        content: str = re.sub(r'^\[参考\d+\]\s*', '', line.strip())
         if content:
             results.append(RetrievalResult(content=content, source="vector", score=1.0, metadata={"type": "vector_search"}))
     log_debug(f"[GraphRAG] 向量检索返回 {len(results)} 条结果")
@@ -298,15 +298,16 @@ def merge_retrieval_results(vector_results: List[RetrievalResult], graph_results
     :return: 合并后的结果列表
     """
     # [step1] 初始化结果容器和去重集合
-    merged, seen_contents = [], set()
+    merged: List[RetrievalResult] = []
+    seen_contents: set = set()
     # [step2] 计算最大遍历长度（取两个列表的较大值）
-    max_len = max(len(graph_results), len(vector_results))
+    max_len: int = max(len(graph_results), len(vector_results))
     # [step3] 交替遍历两个列表
     for i in range(max_len):
         if len(merged) >= max_results:
             break
         if i < len(graph_results):
-            result = graph_results[i]
+            result: RetrievalResult = graph_results[i]
             if result.content[:100] not in seen_contents:
                 merged.append(result)
                 seen_contents.add(result.content[:100])
@@ -327,10 +328,10 @@ def format_retrieval_results(results: List[RetrievalResult]) -> str:
     # [step1] 卫语句：空列表返回空字符串
     if not results:
         return ""
-    formatted_parts = []
+    formatted_parts: List[str] = []
     # [step2] 按来源分组结果
-    graph_results = [r for r in results if r.source == "graph"]
-    vector_results = [r for r in results if r.source == "vector"]
+    graph_results: List[RetrievalResult] = [r for r in results if r.source == "graph"]
+    vector_results: List[RetrievalResult] = [r for r in results if r.source == "vector"]
     # [step3] 格式化知识图谱结果
     if graph_results:
         formatted_parts.append("=== 知识图谱检索结果 ===")
@@ -357,7 +358,9 @@ def retrieve_hybrid_knowledge(query: str) -> GraphRAGResult:
     """
     # [step1] 初始化：记录日志并初始化结果容器
     log_info("[GraphRAG] 开始混合检索...")
-    entities, vector_results, graph_results = [], [], []
+    entities: List[ExtractedEntity] = []
+    vector_results: List[RetrievalResult] = []
+    graph_results: List[RetrievalResult] = []
     # [step2] 实体提取：使用 LLM 从查询中提取医学实体
     if _is_graph_rag_enabled():
         entities = extract_medical_entities(query)
@@ -369,16 +372,16 @@ def retrieve_hybrid_knowledge(query: str) -> GraphRAGResult:
         log_info(f"[GraphRAG] 向量检索返回 {len(vector_results)} 条结果")
     # [step4] 图谱检索：基于实体查询知识图谱
     if _is_graph_rag_enabled() and entities:
-        kg = get_kg()
+        kg: KnowledgeGraph = get_kg()
         if kg.driver:
             graph_results = retrieve_from_knowledge_graph(entities, kg, limit=_get_graph_k())
             log_info(f"[GraphRAG] 图谱检索返回 {len(graph_results)} 条结果")
         else:
             log_warn("[GraphRAG] 知识图谱不可用，跳过图谱检索")
     # [step5] 结果合并：交替合并向量和图谱结果并去重
-    merged_results = merge_retrieval_results(vector_results, graph_results)
+    merged_results: List[RetrievalResult] = merge_retrieval_results(vector_results, graph_results)
     # [step6] 格式化输出：转换为可读文本
-    merged_context = format_retrieval_results(merged_results)
+    merged_context: str = format_retrieval_results(merged_results)
     log_info(f"[GraphRAG] 混合检索完成，共 {len(merged_results)} 条结果")
     # [step7] 返回结构化结果对象
     return GraphRAGResult(entities=entities, vector_results=vector_results, graph_results=graph_results, merged_context=merged_context)
@@ -396,7 +399,7 @@ def retrieve_hybrid_knowledge_snippets(query: str, k: int = 3) -> str:
         return retrieve_knowledge_snippets(query, k=k)
     # [step2] 执行混合检索
     try:
-        result = retrieve_hybrid_knowledge(query)
+        result: GraphRAGResult = retrieve_hybrid_knowledge(query)
         return result.merged_context
     except Exception as e:
         log_error(f"[GraphRAG] 混合检索失败: {e}")

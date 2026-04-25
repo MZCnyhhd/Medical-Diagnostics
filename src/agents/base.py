@@ -25,13 +25,16 @@
     - `src.core.executor`: 工具调用执行器。
 """
 
-import re
-import json
-import asyncio
-import yaml
-from typing import Dict, Any, List, Optional
-from langchain_core.prompts import PromptTemplate
-from tenacity import retry, stop_after_attempt, wait_exponential
+# [导入模块] ############################################################################################################
+# [标准库 | Standard Libraries] =========================================================================================
+# import re                                                              # 正则表达式：用于解析模型输出
+import json                                                            # JSON 处理：用于数据序列化与反序列化
+# import asyncio                                                         # 异步编程：支持并发任务执行
+# [第三方库 | Third-party Libraries] =====================================================================================
+import yaml                                                            # YAML 解析：读取提示词配置
+from typing import Dict, Any, List, Optional, TextIO                   # 类型提示：增强代码可读性与健壮性
+from langchain_core.prompts import PromptTemplate                      # LangChain 提示词：模板管理与变量注入
+from tenacity import retry, stop_after_attempt, wait_exponential       # 重试机制：处理 LLM 调用偶发失败
 # [内部模块 | Internal Modules] =========================================================================================
 from src.services.llm import get_chat_model                            # 模型工厂：初始化大语言模型实例
 from src.core.executor import execute_tool_call                        # 动作执行器：处理 Agent 工具调用指令
@@ -48,6 +51,7 @@ def load_prompts() -> dict:
     """
     # [step1] 尝试读取并解析 YAML 配置文件
     try:
+        f: TextIO
         with open("config/prompts.yaml", "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
     # [step2] 捕获异常并记录错误日志，返回空字典作为降级处理
@@ -55,7 +59,7 @@ def load_prompts() -> dict:
         log_error(f"加载 config/prompts.yaml 失败: {e}")
         return {}
 # [创建全局变量] =========================================================================================================
-PROMPTS_CONFIG = load_prompts()
+PROMPTS_CONFIG: dict = load_prompts()
 # [内部-提取问题] ========================================================================================================
 def _extract_issues(observation: dict) -> list:
     """
@@ -68,8 +72,8 @@ def _extract_issues(observation: dict) -> list:
     if not isinstance(observation, dict):
         return []
     # [step2] 逐层提取嵌套数据
-    result = observation.get("result") or {}
-    issues = result.get("issues") or []
+    result: Dict[str, Any] = observation.get("result") or {}
+    issues: List[Dict[str, Any]] = result.get("issues") or []
     # [step3] 最终类型校验并返回
     return issues if isinstance(issues, list) else []
 # [内部-记录单个问题] =====================================================================================================
@@ -84,9 +88,9 @@ def _log_single_issue(idx: int, issue: dict) -> None:
     if not isinstance(issue, dict):
         return
     # [step2] 安全提取字段并设置默认值
-    name = str(issue.get("name", "")).strip() or "未命名问题"
-    reason = str(issue.get("reason", "")).strip()
-    suggestion = str(issue.get("suggestion", "")).strip()
+    name: str = str(issue.get("name", "")).strip() or "未命名问题"
+    reason: str = str(issue.get("reason", "")).strip()
+    suggestion: str = str(issue.get("suggestion", "")).strip()
     # [step3] 输出问题名称（必输出）
     log_info(f"  问题 {idx}：{name}")
     # [step4] 条件输出理由和建议（非空才输出）
@@ -123,11 +127,11 @@ def _format_single_issue(idx: int, issue: dict) -> str | None:
     if not isinstance(issue, dict):
         return None
     # [step2] 安全提取字段并设置默认值
-    name = str(issue.get("name", "")).strip() or "未命名问题"
-    reason = str(issue.get("reason", "")).strip()
-    suggestion = str(issue.get("suggestion", "")).strip()
+    name: str = str(issue.get("name", "")).strip() or "未命名问题"
+    reason: str = str(issue.get("reason", "")).strip()
+    suggestion: str = str(issue.get("suggestion", "")).strip()
     # [step3] 构建 Markdown 行列表（标题必加，理由/建议按需添加）
-    lines = [f"#### {idx}. {name}"]
+    lines: List[str] = [f"#### {idx}. {name}"]
     if reason:
         lines.append(f"- 理由：{reason}")
     if suggestion:
@@ -146,7 +150,7 @@ def _format_issues_markdown(issues: list) -> str | None:
     if not issues:
         return None
     # [step2] 列表推导：批量格式化每个问题
-    parts = [_format_single_issue(idx, issue) for idx, issue in enumerate(issues, start=1)]
+    parts: List[Optional[str]] = [_format_single_issue(idx, issue) for idx, issue in enumerate(issues, start=1)]
     # [step3] 过滤无效结果（None 值）
     parts = [p for p in parts if p]
     # [step4] 拼接并返回（双换行分隔）
@@ -186,9 +190,9 @@ class Agent:  # Agent 代理
         :return: LangChain PromptTemplate 对象
         """
         # [step1] 从全局配置获取专科医生提示词字典
-        specialist_prompts = PROMPTS_CONFIG.get("specialists", {})
+        specialist_prompts: Dict[str, str] = PROMPTS_CONFIG.get("specialists", {})
         # [step2] 按角色名查找对应模板
-        template = specialist_prompts.get(self.role, "")
+        template: str = specialist_prompts.get(self.role, "")
         # [step3] 卫语句：未找到则使用默认模板并记录警告
         if not template:
             log_warn(f"未在 prompts.yaml 中找到角色 '{self.role}' 的提示词，使用默认模板。")
@@ -204,10 +208,10 @@ class Agent:  # Agent 代理
         :return: 模型生成的诊断建议文本
         """
         # [step1] 构建 RAG 增强后的提示词
-        prompt = self._prepare_prompt()
+        prompt: str = self._prepare_prompt()
         try:
             # [step2] 同步调用大语言模型
-            response = self.model.invoke(prompt)
+            response: Any = self.model.invoke(prompt)
             # [step3] 兼容提取响应内容（适配不同模型返回格式）
             return getattr(response, "content", str(response))
         except Exception as e:
@@ -223,10 +227,10 @@ class Agent:  # Agent 代理
         :return: 模型生成的诊断建议文本
         """
         # [step1] 构建 RAG 增强后的提示词
-        prompt = self._prepare_prompt()
+        prompt: str = self._prepare_prompt()
         try:
             # [step2] 异步调用大语言模型
-            response = await self.model.ainvoke(prompt)
+            response: Any = await self.model.ainvoke(prompt)
             # [step3] 兼容提取响应内容
             return getattr(response, "content", str(response))
         except Exception as e:
@@ -238,13 +242,13 @@ class Agent:  # Agent 代理
         """准备包含 RAG 知识增强的最终提示词"""
         log_info(f"{self.role} 智能体正在运行……")
         # [step1] 基础提示词构建
-        prompt = self.prompt_template.format(medical_report=self.medical_report)
+        prompt: str = self.prompt_template.format(medical_report=self.medical_report)
         # [step2] 卫语句：无报告则直接返回
         if not self.medical_report:
             return prompt
         
         # [step3] 获取 RAG 上下文 (优先使用预注入的上下文)
-        rag_context = self.rag_context
+        rag_context: Optional[str] = self.rag_context
         if not rag_context:
             rag_context = retrieve_hybrid_knowledge_snippets(self.medical_report)
             
@@ -275,7 +279,7 @@ class 多学科团队(Agent):
         :param reports: 专科报告字典，Key 为专科名称，Value 为诊断内容
         """
         # [step1] 将专科报告存入 extra_info 供后续使用
-        extra_info = reports
+        extra_info: Dict[str, str] = reports
         # [step2] 调用父类初始化，固定角色为"多学科团队"
         super().__init__(role="多学科团队", extra_info=extra_info)
     # [外部-实例] ........................................................................................................
@@ -286,17 +290,17 @@ class 多学科团队(Agent):
         :return: 预填充的 LangChain PromptTemplate 对象
         """
         # [step1] 初始化容器，过滤并收集有效的专科报告
-        activate_reports = []
-        active_specialists = []
+        activate_reports: List[str] = []
+        active_specialists: List[str] = []
         for agent_name, report_content in self.extra_info.items():
             if report_content and report_content.strip():
                 activate_reports.append(f"{agent_name}报告：{report_content}")
                 active_specialists.append(agent_name)
         # [step2] 格式化报告文本和专家名单
-        reports_text = "\n".join(activate_reports)
-        specialists_text = "、".join(active_specialists)
+        reports_text: str = "\n".join(activate_reports)
+        specialists_text: str = "、".join(active_specialists)
         # [step3] 从 YAML 获取模板，若缺失则使用兜底模板
-        template_str = PROMPTS_CONFIG.get("multidisciplinary_team", "")
+        template_str: str = PROMPTS_CONFIG.get("multidisciplinary_team", "")
         if not template_str:
             template_str = """
             请以多学科医疗团队的身份进行推理。
@@ -416,9 +420,9 @@ class 多学科团队(Agent):
         if tool_name != "generate_structured_diagnosis":
             return None
         # [step2] 序列化工具调用指令
-        tool_call = json.dumps({"tool": tool_name, "args": tool_args}, ensure_ascii=False)
+        tool_call: str = json.dumps({"tool": tool_name, "args": tool_args}, ensure_ascii=False)
         # [step3] 委托执行器执行工具
-        observation = execute_tool_call(tool_call)
+        observation: Any = execute_tool_call(tool_call)
         # [step4] 记录观察结果日志
         if isinstance(observation, dict):
             _log_issues(_extract_issues(observation))

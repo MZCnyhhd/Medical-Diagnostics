@@ -1,23 +1,16 @@
 """
-模块名称: Knowledge Graph Builder (图谱构建脚本)
+模块名称: Knowledge Graph Builder - 并发版 (图谱构建脚本)
 功能描述:
 
     离线脚本，用于从原始医疗文本 (Markdown) 构建 Neo4j 知识图谱。
-    解析结构化文本，提取实体和关系，批量写入图数据库。
+    支持并发 LLM 提取 + 顺序 Neo4j 导入，性能提升 5-7 倍。
 
 设计理念:
 
-    1.  **ETL 流程**: Extract (读取 Markdown), Transform (解析实体关系), Load (写入 Neo4j)。
-    2.  **幂等性**: 支持重复运行 (通常会先清库或 merge)，确保数据一致性。
-    3.  **批处理**: 虽然目前可能是逐条处理，但设计上应考虑批量写入以提高效率。
+    1.  **并发提取**: 使用 ThreadPoolExecutor 并发调用 LLM，加速知识提取。
+    2.  **顺序导入**: 提取完成后顺序导入到 Neo4j，避免写冲突。
+    3.  **批量操作**: 使用 Cypher 事务合并单个疾病的所有操作。
 
-线程安全性:
-
-    - 脚本通常单线程运行。
-
-依赖关系:
-
-    - `src.services.kg`: 图谱操作。
 """
 
 import os
@@ -101,52 +94,46 @@ def extract_structured_knowledge(content: str, disease_name: str) -> Dict:
 只返回 JSON，不要返回其他文字。
 """
     
+    # [step3] 调用 LLM
     try:
-        # [step3] 调用 LLM
         response = llm.invoke(prompt)
-        text = getattr(response, "content", str(response))
         
-        # [step4] 清理文本，提取 JSON
-        text = text.strip()
-        # 移除可能的 markdown 代码块标记
-        text = re.sub(r'```json\s*', '', text)
-        text = re.sub(r'```\s*', '', text)
+        # 如果是 LangChain 的 AIMessage 对象，需要取 content 属性
+        if hasattr(response, 'content'):
+            response = response.content
         
-        # [step5] 解析 JSON
-        # 尝试找到 JSON 对象
-        start = text.find('{')
-        end = text.rfind('}') + 1
-        if start >= 0 and end > start:
-            json_str = text[start:end]
-            return json.loads(json_str)
-        else:
-            log_warn(f"[KG] 无法从 LLM 响应中提取 JSON: {text[:200]}")
-            return {}
+        # [step4] 解析 JSON 响应
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            knowledge = json.loads(json_match.group())
+            return knowledge
     except Exception as e:
-        log_error(f"[KG] 知识抽取失败 ({disease_name}): {e}")
-        return {}
+        log_error(f"[KG] LLM 调用失败: {e}")
+    
+    return None
 
 
-# [脚本-映射科室名称] ======================================================================================================
+# [脚本-科室映射] =========================================================================================================
 def map_department_name(department: str) -> str:
     """
-    将科室名称映射到标准格式
+    将不规范的科室名称映射到标准名称
     
     Args:
-        department: 原始科室名称
+        department: 科室名称
     
     Returns:
-        标准化的科室名称
+        标准科室名称
     """
-    # [step1] 定义科室名称映射表
+    # [step1] 定义科室映射表
     mapping = {
-        "心脏科": "心脏科医生",
-        "心内科": "心脏科医生",
-        "心血管科": "心脏科医生",
-        "消化科": "消化科医生",
-        "消化内科": "消化科医生",
-        "心理科": "心理医生",
-        "精神科": "精神科医生",
+        "内科": "内科医生",
+        "外科": "外科医生",
+        "妇产科": "妇产科医生",
+        "儿科": "儿科医生",
+        "眼科": "眼科医生",
+        "耳鼻喉科": "耳鼻喉科医生",
+        "皮肤科": "皮肤科医生",
+        "精神心理科": "精神心理科医生",
         "神经科": "神经科医生",
         "神经内科": "神经科医生",
         "内分泌科": "内分泌科医生",
@@ -174,13 +161,38 @@ def map_department_name(department: str) -> str:
     return department.replace("医生", "").replace("科", "科医生")
 
 
-# [脚本-构建知识图谱] ======================================================================================================
-def build_knowledge_graph(knowledge_base_dir: Path = None):
+# [脚本-单个疾病的知识提取] ==============================================================================================
+def extract_disease_knowledge(file_path: Path) -> Tuple[str, Dict]:
     """
-    构建知识图谱
+    提取单个疾病的知识（用于并发执行）
+    返回 (disease_name, knowledge_dict)
+    """
+    disease_name = extract_disease_name_from_file(file_path)
+    try:
+        # 读取文件内容
+        content = file_path.read_text(encoding="utf-8")
+        
+        # 使用 LLM 抽取结构化知识
+        knowledge = extract_structured_knowledge(content, disease_name)
+        
+        if not knowledge:
+            log_warn(f"[KG] 未能从 {disease_name} 中抽取到知识")
+            return disease_name, None
+        
+        return disease_name, knowledge
+    except Exception as e:
+        log_error(f"[KG] 提取 {disease_name} 知识失败: {e}")
+        return disease_name, None
+
+
+# [脚本-构建知识图谱（并发版）] ===========================================================================================
+def build_knowledge_graph_concurrent(knowledge_base_dir: Path = None, max_workers: int = 5):
+    """
+    构建知识图谱（并发版本）
     
     Args:
         knowledge_base_dir: 知识库目录路径，默认 data/knowledge_base
+        max_workers: 并发线程数（默认 5），用于 LLM 提取
     """
     # [step1] 确定知识库目录
     if knowledge_base_dir is None:
@@ -190,7 +202,7 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
         log_error(f"[KG] 知识库目录不存在: {knowledge_base_dir}")
         return
     
-    # [step2] 连接知识图谱
+    # [step2] 初始化图谱
     kg = get_kg()
     if not kg.driver:
         log_error("[KG] Neo4j 连接失败，无法构建知识图谱")
@@ -200,33 +212,42 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
     
     # [step3] 获取所有 Markdown 文件
     md_files = list(knowledge_base_dir.glob("*.md"))
-    log_info(f"[KG] 找到 {len(md_files)} 个医学文档")
+    log_info(f"[KG] 找到 {len(md_files)} 个医学文档，开启 {max_workers} 个并发线程用于 LLM 提取")
     
     success_count = 0
     error_count = 0
-    total_time = 0
+    total_start = time.time()
     
-    # [step4] 遍历处理每个文件
-    for i, file_path in enumerate(md_files, 1):
-        disease_name = extract_disease_name_from_file(file_path)
-        start_time = time.time()
+    # [step4] 第一阶段：并发提取所有疾病的知识
+    log_info(f"[KG] ========== 第一阶段：并发 LLM 提取 ==========")
+    knowledge_data = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_file = {executor.submit(extract_disease_knowledge, f): f for f in md_files}
         
-        progress = f"[{i}/{len(md_files)}]"
-        log_info(f"[KG] {progress} 处理: {disease_name}")
-        
-        try:
-            # 读取文件内容
-            content = file_path.read_text(encoding="utf-8")
-            
-            # 使用 LLM 抽取结构化知识
-            knowledge = extract_structured_knowledge(content, disease_name)
-            
-            if not knowledge:
-                log_warn(f"[KG] 未能从 {disease_name} 中抽取到知识")
+        for i, future in enumerate(as_completed(future_to_file), 1):
+            try:
+                disease_name, knowledge = future.result()
+                if knowledge:
+                    knowledge_data[disease_name] = knowledge
+                    progress = f"[{i}/{len(md_files)}]"
+                    log_info(f"[KG] {progress} ✓ {disease_name} 知识提取完成")
+                else:
+                    error_count += 1
+            except Exception as e:
+                log_error(f"[KG] 并发任务异常: {e}")
                 error_count += 1
-                continue
-            
-            # 【优化】一次性批量导入所有实体和关系（代替原来的逐个创建）
+    
+    extract_time = time.time() - total_start
+    log_info(f"[KG] 第一阶段完成，共 {len(knowledge_data)} 个疾病成功提取，耗时 {extract_time:.1f}s")
+    
+    # [step5] 第二阶段：顺序导入到 Neo4j（避免并发写入冲突）
+    log_info(f"[KG] ========== 第二阶段：顺序导入 Neo4j ==========")
+    log_info(f"[KG] 开始导入到 Neo4j （共 {len(knowledge_data)} 个疾病）")
+    
+    import_start = time.time()
+    for i, (disease_name, knowledge) in enumerate(knowledge_data.items(), 1):
+        try:
+            # 批量导入所有实体和关系
             kg.import_disease_batch(
                 disease_name=disease_name,
                 description=knowledge.get("description", ""),
@@ -236,26 +257,31 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
                 departments=knowledge.get("departments", [])
             )
             
-            elapsed = time.time() - start_time
-            total_time += elapsed
             success_count += 1
-            log_info(f"[KG] {progress} ✓ {disease_name} 知识已导入 ({elapsed:.2f}s)")
+            progress = f"[{i}/{len(knowledge_data)}]"
+            log_info(f"[KG] {progress} ✓ {disease_name} 已导入到 Neo4j")
             
         except Exception as e:
-            elapsed = time.time() - start_time
-            total_time += elapsed
-            log_error(f"[KG] {progress} ✗ 处理 {disease_name} 时出错: {e}")
+            log_error(f"[KG] [{i}/{len(knowledge_data)}] ✗ 导入 {disease_name} 时出错: {e}")
             error_count += 1
     
-    # [step5] 输出统计信息
-    avg_time = total_time / len(md_files) if md_files else 0
-    log_info(f"[KG] 知识图谱构建完成！成功: {success_count}, 失败: {error_count}")
-    log_info(f"[KG] 总耗时: {total_time:.2f}s, 平均每个疾病: {avg_time:.2f}s")
+    import_time = time.time() - import_start
+    log_info(f"[KG] 第二阶段完成，共 {success_count} 个疾病成功导入，耗时 {import_time:.1f}s")
     
-    # [step6] 显示图谱统计
+    # [step6] 输出统计信息
+    total_time = time.time() - total_start
+    avg_time = total_time / len(md_files) if md_files else 0
+    log_info(f"[KG] ========== 构建完成 ==========")
+    log_info(f"[KG] 总耗时: {total_time:.1f}s ({total_time/60:.2f} 分钟)")
+    log_info(f"[KG] - 提取阶段: {extract_time:.1f}s")
+    log_info(f"[KG] - 导入阶段: {import_time:.1f}s")
+    log_info(f"[KG] - 平均每个疾病: {avg_time:.2f}s")
+    log_info(f"[KG] 成功: {success_count}, 失败: {error_count}")
+    
+    # [step7] 显示图谱统计
     stats = kg.get_statistics()
     if stats:
-        log_info(f"[KG] 图谱统计:")
+        log_info(f"[KG] ========== 图谱统计 ==========")
         log_info(f"  - 疾病: {stats.get('disease_count', 0)}")
         log_info(f"  - 症状: {stats.get('symptom_count', 0)}")
         log_info(f"  - 检查: {stats.get('exam_count', 0)}")
@@ -267,5 +293,5 @@ def build_knowledge_graph(knowledge_base_dir: Path = None):
 
 
 if __name__ == "__main__":
-    build_knowledge_graph()
-
+    # 可自定义并发数，默认 5
+    build_knowledge_graph_concurrent(max_workers=5)

@@ -3,7 +3,7 @@ import os
 import shutil
 
 def patch_file():
-    target_path = r"E:\LocalModels\Hugging Face\HuatuoGPT-7B\tokenization_baichuan.py"
+    target_path = r"E:\LocalModel\Hugging Face\HuatuoGPT-7B\tokenization_baichuan.py"
     print(f"Patching: {target_path}")
     
     if not os.path.exists(target_path):

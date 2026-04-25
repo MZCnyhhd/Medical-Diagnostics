@@ -43,7 +43,7 @@ def _is_rag_enabled() -> bool:
     :return: True 表示启用，False 表示禁用
     """
     # [step1] 读取环境变量并标准化
-    flag = os.getenv("ENABLE_RAG", "true").strip().lower()
+    flag: str = os.getenv("ENABLE_RAG", "true").strip().lower()
     # [step2] 判断是否为禁用标志
     return flag not in {"0", "false", "no", "off"}
 # [内部-获取嵌入模型] =====================================================================================================
@@ -53,7 +53,7 @@ def _get_embedding_model() -> PineconeEmbeddings:
     :return: PineconeEmbeddings 对象
     """
     # [step1] 从环境变量获取模型名称，默认使用 llama-text-embed-v2
-    model_name = os.getenv("PINECONE_EMBEDDING_MODEL", "llama-text-embed-v2")
+    model_name: str = os.getenv("PINECONE_EMBEDDING_MODEL", "llama-text-embed-v2")
     # [step2] 返回嵌入模型实例
     return PineconeEmbeddings(model=model_name)
 # [内部-加载本地FAISS索引] ================================================================================================
@@ -71,16 +71,16 @@ def _load_local_faiss() -> Optional["FAISS"]:
         log_warn("[RAG] 尝试自动修复：pip install sentence-transformers langchain-huggingface")
         return None
     # [step2] 获取本地嵌入模型
-    model_name = os.getenv("LOCAL_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    model_name: str = os.getenv("LOCAL_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     try:
         log_info(f"[RAG] 正在初始化本地 Embedding 模型: {model_name} (首次运行可能需要下载)...")
-        embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        embeddings: Any = HuggingFaceEmbeddings(model_name=model_name)
         log_info(f"[RAG] 本地 Embedding 模型加载成功")
     except Exception as e:
         log_error(f"[RAG] 本地 Embedding 模型初始化失败: {e}")
         return None
     # [step3] 检查索引目录是否存在
-    save_path = "local_vector_index"
+    save_path: str = "local_vector_index"
     if not os.path.exists(save_path):
         log_warn(f"[RAG] 本地索引目录 {save_path} 不存在，请先运行 ingest_knowledge.py")
         return None
@@ -97,12 +97,12 @@ def _load_pinecone_index() -> Optional[PineconeVectorStore]:
     :return: PineconeVectorStore 实例，加载失败返回 None
     """
     # [step1] 检查 API Key 是否配置
-    api_key = os.getenv("PINECONE_API_KEY")
+    api_key: Optional[str] = os.getenv("PINECONE_API_KEY")
     if not api_key:
         return None
     # [step2] 获取索引名称和嵌入模型
-    index_name = os.getenv("PINECONE_INDEX_NAME", "medical-knowledge")
-    embedding = _get_embedding_model()
+    index_name: str = os.getenv("PINECONE_INDEX_NAME", "medical-knowledge")
+    embedding: PineconeEmbeddings = _get_embedding_model()
     # [step3] 连接 Pinecone 索引
     try:
         return PineconeVectorStore.from_existing_index(index_name=index_name, embedding=embedding)
@@ -123,13 +123,13 @@ def _get_vectorstore() -> Any:
     # [step2] 自动策略选择
     # 策略 1: 显式开启 USE_LOCAL_RAG
     # 策略 2: 使用本地 LLM (local) 时，默认优先尝试本地 RAG
-    llm_provider = os.getenv("LLM_PROVIDER", "qwen").lower()
-    use_local_rag = os.getenv("USE_LOCAL_RAG", "false").lower() == "true"
-    should_try_local = use_local_rag or (llm_provider == "local")
+    llm_provider: str = os.getenv("LLM_PROVIDER", "qwen").lower()
+    use_local_rag: bool = os.getenv("USE_LOCAL_RAG", "false").lower() == "true"
+    should_try_local: bool = use_local_rag or (llm_provider == "local")
 
     if should_try_local:
         log_info("[RAG] 尝试加载本地向量知识库 (策略: 优先本地)...")
-        vs = _load_local_faiss()
+        vs: Optional[Any] = _load_local_faiss()
         if vs:
             return vs
         log_warn("[RAG] 本地向量库加载失败，尝试降级使用 Pinecone 云端向量库...")
@@ -147,19 +147,19 @@ def retrieve_knowledge_snippets(query: str, k: int = 3) -> str:
     # [step1] 卫语句：RAG 未启用或向量存储不可用
     if not _is_rag_enabled():
         return ""
-    vectorstore = _get_vectorstore()
+    vectorstore: Any = _get_vectorstore()
     if vectorstore is None:
         return ""
     # [step2] 执行相似度搜索
     try:
-        docs = vectorstore.similarity_search(query, k=k)
+        docs: List[Any] = vectorstore.similarity_search(query, k=k)
     except Exception as e:
         log_warn("[RAG] 向量检索失败，已跳过向量知识库。错误类型：", type(e).__name__)
         return ""
     # [step3] 格式化检索结果
     snippets: List[str] = []
     for i, doc in enumerate(docs, start=1):
-        text = (doc.page_content or "").strip()
+        text: str = (doc.page_content or "").strip()
         if text:
             snippets.append(f"[参考{i}] {text}")
     # [step4] 返回拼接结果

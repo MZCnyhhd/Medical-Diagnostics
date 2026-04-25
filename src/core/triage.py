@@ -24,6 +24,7 @@
 import json
 import ast
 import re
+from typing import List, Optional, Any                                 # 类型提示
 # [第三方库 | Third-party Libraries] ====================================================================================
 from langchain_core.prompts import PromptTemplate                      # 提示词模板
 # [内部模块 | Internal Modules] =========================================================================================
@@ -113,7 +114,7 @@ def _build_triage_prompt() -> PromptTemplate:
     :return: LangChain PromptTemplate 对象
     """
     # [step1] 定义分诊提示词模板（含角色设定、任务说明、输出格式约束）
-    template = """你是一位经验丰富的全科分诊医生。
+    template: str = """你是一位经验丰富的全科分诊医生。
 请阅读以下患者的医疗报告，并从给定的专科医生列表中，挑选出最需要参与会诊的科室。
 可用专科列表：{specialists}
 患者报告：

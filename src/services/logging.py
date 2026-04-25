@@ -29,8 +29,8 @@ from colorlog import ColoredFormatter
 
 # [初始化配置] ===========================================================================================================
 # [step1] 获取日志级别（默认 INFO）
-_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-_level_map = {
+_log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
+_level_map: dict[str, int] = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
     "WARN": logging.WARNING,
@@ -39,20 +39,20 @@ _level_map = {
 }
 
 # [step2] 创建并配置日志器
-_logger = logging.getLogger("medical_diagnostics")
+_logger: logging.Logger = logging.getLogger("medical_diagnostics")
 _logger.setLevel(_level_map.get(_log_level, logging.INFO))
 
 # [step3] 配置 Handler (避免重复添加)
 if not _logger.handlers:
     # 创建控制台 handler
-    _console_handler = logging.StreamHandler(sys.stdout)
+    _console_handler: logging.StreamHandler = logging.StreamHandler(sys.stdout)
     _console_handler.setLevel(logging.DEBUG)
     
     # 设置格式：时间 [级别] 消息
     # 使用 colorlog 进行彩色输出
     try:
         from colorlog import ColoredFormatter
-        _formatter = ColoredFormatter(
+        _formatter: logging.Formatter = ColoredFormatter(
             "%(log_color)s%(asctime)s [%(levelname)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
             log_colors={
