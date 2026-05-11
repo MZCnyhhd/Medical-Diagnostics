@@ -23,15 +23,17 @@
 """
 
 import os
+import asyncio
+import threading
 import base64
 import requests
 import streamlit as st
+from langchain_core.runnables import RunnableLambda
 from langchain_community.chat_models import ChatTongyi
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 # [fix] 延迟导入，避免在不支持本地模型的环境（如 Torch 缺失）中启动崩溃
 # from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
-from langchain_ollama import ChatOllama
 from src.services.logging import log_info, log_warn, log_error
 # [定义函数] ############################################################################################################
 # [内部-加载本地模型] =====================================================================================================
@@ -44,8 +46,7 @@ def _load_local_model(model_path: str):
     """
     # [step1] 延迟导入本地依赖
     try:
-        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
-        from langchain_huggingface import HuggingFacePipeline, ChatHuggingFace
+        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
         import torch
     except ImportError as e:
         log_warn(f"本地模型依赖缺失: {e}")
@@ -56,6 +57,10 @@ def _load_local_model(model_path: str):
         # [Fix] HuatuoGPT-7B 等模型包含自定义代码，必须启用 trust_remote_code=True
         # [Fix] 强制 use_fast=False，防止 transformers 尝试将其转换为 FastTokenizer 导致 'vocab_size' 属性冲突
         tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        # [Fix] 某些自定义模型未显式设置 pad_token，会导致生成阶段出现 shape 相关异常
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
         
         # [Optimization] 配置 4-bit 量化以适配 RTX 5060 (8GB VRAM)
         # 这将把模型大小从 ~14GB 压缩到 ~4.5GB，无需 offload 到磁盘，大幅提升加载和推理速度
@@ -67,53 +72,96 @@ def _load_local_model(model_path: str):
         )
 
         # [Fix] 配置模型加载参数
-        model: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
-            model_path, 
-            quantization_config=bnb_config,  # 启用量化
-            device_map="auto", 
-            trust_remote_code=True
-        )
-        log_info(f"模型已加载到设备: {model.device} (4-bit Quantized)")
+        # 先尝试纯 GPU 4-bit；若显存不足则自动降级为 CPU offload 模式
+        try:
+            model: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                quantization_config=bnb_config,
+                device_map="auto",
+                trust_remote_code=True
+            )
+            loaded_mode = "4-bit Quantized"
+        except Exception as load_err:
+            err_text = str(load_err)
+            if ("dispatched on the CPU or the disk" in err_text) or ("offload" in err_text.lower()):
+                log_warn("检测到显存不足，自动切换为 8-bit + CPU offload 模式加载本地模型...")
+                offload_config: BitsAndBytesConfig = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=True
+                )
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    quantization_config=offload_config,
+                    device_map="auto",
+                    trust_remote_code=True
+                )
+                loaded_mode = "8-bit + CPU Offload"
+            else:
+                raise load_err
+        if getattr(model.config, "pad_token_id", None) is None:
+            model.config.pad_token_id = tokenizer.pad_token_id
+        if getattr(model.config, "eos_token_id", None) is None:
+            model.config.eos_token_id = tokenizer.eos_token_id
+        log_info(f"模型已加载到设备: {model.device} ({loaded_mode})")
     except Exception as e:
         log_warn(f"加载本地模型失败: {e}")
         return None
-    # [step3] 创建文本生成 Pipeline
-    # [Fix] 显式传递 trust_remote_code=True 给 pipeline，防止某些自定义模型在 pipeline 初始化时报错
-    pipe: pipeline = pipeline(
-        "text-generation", 
-        model=model, 
-        tokenizer=tokenizer, 
-        max_new_tokens=2048, 
-        temperature=0.1, 
-        top_p=0.95, 
-        repetition_penalty=1.15, 
-        return_full_text=False,
-        trust_remote_code=True
-    )
-    # [step4] 包装为 LangChain 接口
-    # [Fix] 增加异常捕获，如果 ChatHuggingFace 包装失败（如因 custom code），则回退到基础 pipeline
-    try:
-        local_llm: HuggingFacePipeline = HuggingFacePipeline(pipeline=pipe)
-        # [Fix] 显式传递 model_kwargs 给 ChatHuggingFace，确保它知道需要 trust_remote_code
-        # 虽然 ChatHuggingFace 本身不直接接受 trust_remote_code，但它在内部调用 tokenizer/model 时可能会用到
-        # 更重要的是，之前的报错是因为 ChatHuggingFace 试图重新加载某些配置时没带参数
-        # 我们这里使用一种更彻底的方式：直接构建一个自定义的包装器，或者忽略这个特定的 Warning（因为它只是 Warning）
-        # 但既然已经回退到了 HuggingFacePipeline，我们可以尝试直接返回它，或者再次尝试用参数包装
-        
-        # 尝试 1: 标准包装
-        # chat_model = ChatHuggingFace(llm=local_llm)
-        
-        # 尝试 2: 既然 ChatHuggingFace 对自定义模型支持不好，且 HuggingFacePipeline 已经能工作（Text Generation）
-        # 我们直接使用 HuggingFacePipeline 配合 prompt template 即可满足需求
-        # 为了保持接口一致性，我们这里直接返回 HuggingFacePipeline，并在上层统一处理
-        log_info("本地模型加载成功 (Base Pipeline Mode)！")
-        return local_llm
-        
-    except Exception as e:
-        log_warn(f"ChatHuggingFace 包装失败，回退到基础 Pipeline 模式: {e}")
-        # HuggingFacePipeline 也是一个合法的 LangChain LLM，可以直接使用
-        log_info("本地模型加载成功 (Base Mode)！")
-        return HuggingFacePipeline(pipeline=pipe)
+    # [step3] 直接调用 model.generate（绕过 pipeline，规避部分自定义模型在 pipeline 路径上的 shape 异常）
+    max_new_tokens = int(os.getenv("LOCAL_MAX_NEW_TOKENS", "512"))
+    temperature = float(os.getenv("LOCAL_TEMPERATURE", "0.1"))
+    top_p = float(os.getenv("LOCAL_TOP_P", "0.95"))
+    repetition_penalty = float(os.getenv("LOCAL_REPETITION_PENALTY", "1.15"))
+    max_input_tokens = int(os.getenv("LOCAL_MAX_INPUT_TOKENS", "2048"))
+    generation_lock = threading.Lock()
+
+    def _generate_text(prompt: str) -> str:
+        text = str(prompt)
+        with generation_lock:
+            inputs = tokenizer(
+                text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=max_input_tokens,
+                padding=False
+            )
+            input_ids = inputs["input_ids"].to(model.device)
+            attention_mask = inputs.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(model.device)
+
+            gen_kwargs = {
+                "input_ids": input_ids,
+                "max_new_tokens": max_new_tokens,
+                "repetition_penalty": repetition_penalty,
+                "pad_token_id": tokenizer.pad_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
+                "do_sample": temperature > 0
+            }
+            if attention_mask is not None:
+                gen_kwargs["attention_mask"] = attention_mask
+            if gen_kwargs["do_sample"]:
+                gen_kwargs["temperature"] = temperature
+                gen_kwargs["top_p"] = top_p
+
+            with torch.no_grad():
+                outputs = model.generate(**gen_kwargs)
+
+            output_ids = outputs[0]
+            prompt_len = input_ids.shape[-1]
+            generated_ids = output_ids[prompt_len:] if output_ids.shape[-1] > prompt_len else output_ids
+            generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+            if generated_text:
+                return generated_text
+            return tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+
+    def _invoke(prompt):
+        return _generate_text(prompt)
+
+    async def _ainvoke(prompt):
+        return await asyncio.to_thread(_generate_text, prompt)
+
+    log_info("本地模型加载成功 (Direct Generate Mode)！")
+    return RunnableLambda(_invoke, afunc=_ainvoke)
 # [内部-初始化 Qwen] =====================================================================================================
 def _init_qwen(temperature, available_models, init_errors):
     """初始化通义千问模型"""
@@ -145,22 +193,37 @@ def _init_baichuan(temperature, available_models, init_errors):
         log_warn(f"初始化 Baichuan 失败: {e}")
 
 # [内部-初始化 Ollama] =====================================================================================================
+def _ollama_generate(prompt: str, model_name: str, base_url: str, temperature: float) -> str:
+    """
+    直接调用 Ollama /api/generate，绕过 langchain_ollama 在部分环境下的 502 兼容问题。
+    """
+    api_url = f"{base_url.rstrip('/')}/api/generate"
+    timeout = int(os.getenv("OLLAMA_TIMEOUT", "180"))
+    payload = {
+        "model": model_name,
+        "prompt": str(prompt),
+        "stream": False,
+        "options": {"temperature": temperature}
+    }
+    resp = requests.post(api_url, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json() or {}
+    return data.get("response", "")
+
+
 def _init_ollama(temperature, available_models, init_errors):
-    """初始化 Ollama 本地模型"""
+    """初始化 Ollama 本地模型（HTTP 直连版）"""
     try:
         model_name = os.getenv("OLLAMA_MODEL", "gemma:latest")
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        
-        # 尝试连接 Ollama 服务
-        # 注意: 这里不进行实际的连接测试，因为 LangChain 会在首次调用时连接
-        # 但我们可以简单检查 base_url 是否可访问 (可选)
-        
-        available_models["ollama"] = ChatOllama(
-            model=model_name,
-            temperature=temperature,
-            base_url=base_url
-        )
-        # [Fix] 仅在首次初始化时打印日志，避免刷屏
+
+        def _invoke(prompt):
+            return _ollama_generate(str(prompt), model_name, base_url, temperature)
+
+        async def _ainvoke(prompt):
+            return await asyncio.to_thread(_ollama_generate, str(prompt), model_name, base_url, temperature)
+
+        available_models["ollama"] = RunnableLambda(_invoke, afunc=_ainvoke)
         if not hasattr(_init_ollama, "_logged_config") or _init_ollama._logged_config != (model_name, base_url):
             log_info(f"Ollama 模型已配置: {model_name} @ {base_url}")
             _init_ollama._logged_config = (model_name, base_url)
@@ -177,24 +240,29 @@ def _init_available_models(temperature: float) -> tuple[dict, dict]:
     """
     available_models: dict = {}
     init_errors: dict = {}
-    # [step1] 尝试加载本地模型
-    local_path = os.getenv("LOCAL_MODEL_PATH")
-    if local_path:
-        # 支持相对路径和绝对路径
-        if not os.path.isabs(local_path):
-            local_path = os.path.abspath(local_path)
-            
-        if os.path.exists(local_path):
-            local_model = _load_local_model(local_path)
-            if local_model:
-                available_models["local"] = local_model
-        else:
-            log_warn(f"配置的本地模型路径不存在: {local_path}")
-            init_errors["local"] = f"路径不存在: {local_path}"
-    # [step2] 初始化云端模型
-    _init_qwen(temperature, available_models, init_errors)
-    _init_baichuan(temperature, available_models, init_errors)
-    _init_ollama(temperature, available_models, init_errors)
+    # [step1] 尝试加载本地模型（仅在用户选择本地模式时加载，避免云端模式下浪费时间）
+    current_provider = os.getenv("LLM_PROVIDER", "qwen").lower()
+    if current_provider == "local":
+        local_path = os.getenv("LOCAL_MODEL_PATH")
+        if local_path:
+            if not os.path.isabs(local_path):
+                local_path = os.path.abspath(local_path)
+            if os.path.exists(local_path):
+                local_model = _load_local_model(local_path)
+                if local_model:
+                    available_models["local"] = local_model
+            else:
+                log_warn(f"配置的本地模型路径不存在: {local_path}")
+                init_errors["local"] = f"路径不存在: {local_path}"
+    # [step2] 按需初始化模型：云端模式只初始化云端 API，本地模式只初始化本地模型
+    # 选 qwen/baichuan → 仅初始化对应云端 API
+    # 选 ollama → 仅初始化 Ollama 本地服务
+    # 选 local → 仅加载 HuggingFace 本地模型（已在 step1 完成）
+    if current_provider in ("qwen", "baichuan"):
+        _init_qwen(temperature, available_models, init_errors)
+        _init_baichuan(temperature, available_models, init_errors)
+    elif current_provider == "ollama":
+        _init_ollama(temperature, available_models, init_errors)
     return available_models, init_errors
 # [内部-选择模型提供商] ===================================================================================================
 def _select_provider(override_provider: str | None, available_models: dict, init_errors: dict, priority_order: list[str]) -> str:

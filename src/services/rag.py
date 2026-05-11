@@ -122,10 +122,11 @@ def _get_vectorstore() -> Any:
     
     # [step2] 自动策略选择
     # 策略 1: 显式开启 USE_LOCAL_RAG
-    # 策略 2: 使用本地 LLM (local) 时，默认优先尝试本地 RAG
+    # 策略 2: 本地 LLM (local/ollama) → 加载 BAAI-bge 走 FAISS 本地向量库
+    #         云端 LLM (qwen/baichuan) → 走 Pinecone + Neo4j 云端向量库
     llm_provider: str = os.getenv("LLM_PROVIDER", "qwen").lower()
     use_local_rag: bool = os.getenv("USE_LOCAL_RAG", "false").lower() == "true"
-    should_try_local: bool = use_local_rag or (llm_provider == "local")
+    should_try_local: bool = use_local_rag or (llm_provider in ("local", "ollama"))
 
     if should_try_local:
         log_info("[RAG] 尝试加载本地向量知识库 (策略: 优先本地)...")

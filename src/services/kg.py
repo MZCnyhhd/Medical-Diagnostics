@@ -391,13 +391,14 @@ class KnowledgeGraph:
         query = f"""
         MATCH (n)
         WHERE any(label IN labels(n) WHERE label IN $entity_types)
-          AND (n.name CONTAINS $keyword OR any(alias IN n.aliases WHERE alias CONTAINS $keyword))
+          AND (n.name CONTAINS $keyword OR any(alias IN coalesce(n[$alias_key], []) WHERE alias CONTAINS $keyword))
         RETURN labels(n)[0] as type, n.name as name, n.description as description
         LIMIT 20
         """
         result: List[Dict] = self._execute_query(query, {
             "keyword": keyword,
-            "entity_types": entity_types
+            "entity_types": entity_types,
+            "alias_key": "aliases"
         })
         return result
     
@@ -573,4 +574,3 @@ def get_kg() -> KnowledgeGraph:
     if _kg_instance is None:
         _kg_instance = KnowledgeGraph()
     return _kg_instance
-
